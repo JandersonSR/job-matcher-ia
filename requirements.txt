@@ -1,6 +1,15 @@
-pymongo
-sentence-transformers
-torch
-python-dotenv
-openai
-requests
+# Conexão com MongoDB
+pymongo==4.4.0
+
+# Embeddings com Sentence Transformers
+sentence-transformers==2.2.2
+torch==2.2.0
+
+# LLM via Ollama ou OpenAI API
+openai==1.0.0
+
+# Chamadas HTTP para API gratuita de LLM
+requests==2.31.0
+
+# Carregar variáveis de ambiente do .env
+python-dotenv==1.0.1
