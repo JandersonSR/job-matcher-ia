@@ -1,12 +1,17 @@
+import os
+from dotenv import load_dotenv
 import time
 import pymongo
 from sentence_transformers import SentenceTransformer, util
 
-# Conexão com MongoDB
-MONGO_URI = "mongodb://localhost:27017"
-DB_NAME = "JOB_MATCHER"
+# Carregar variáveis de ambiente
+load_dotenv()
 
-client = pymongo.MongoClient('mongodb+srv://dbTg:fastpass@cluster0.qtit3.mongodb.net/?retryWrites=true&w=majority')
+# Conexão com MongoDB
+MONGO_URI = os.getenv("MONGO_URL")
+DB_NAME = os.getenv("DB_NAME")
+
+client = pymongo.MongoClient(MONGO_URI)
 db = client[DB_NAME]
 curriculos_col = db["curriculos"]
 vagas_col = db["vagas"]

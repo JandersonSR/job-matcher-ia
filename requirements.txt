@@ -1,3 +1,4 @@
 pymongo
 sentence-transformers
 torch
+python-dotenv

@@ -1,0 +1,39 @@
+# Ambiente virtual local
+venv/
+.env
+*.env
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+
+# Cache de pacotes / modelos
+.cache/
+transformers_cache/
+torch_cache/
+sentence_transformers/
+
+# Saídas de build
+dist/
+build/
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Logs e temporários
+*.log
+*.tmp
+*.swp
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore

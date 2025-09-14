@@ -1,0 +1,40 @@
+# Ambiente virtual
+venv/
+.env
+*.env
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+
+# Arquivos temporários / logs
+*.log
+*.tmp
+*.swp
+
+# Checkpoints de Jupyter
+.ipynb_checkpoints/
+
+# Cache do Torch/SentenceTransformers
+.cache/
+transformers_cache/
+torch_cache/
+sentence_transformers/
+
+# Saídas de build
+dist/
+build/
+
+# Arquivos de sistema (Linux/Mac/Win)
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+*.sock
+docker-compose.override.yml
