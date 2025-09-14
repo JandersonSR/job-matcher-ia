@@ -29,8 +29,8 @@ embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # Cliente para Ollama (simula OpenAI API, mas roda local)
 llm_client = OpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="ollama"  # placeholder, Ollama não exige autenticação
+  base_url="http://localhost:11434/v1",
+  api_key="ollama"  # placeholder, Ollama não exige autenticação
 )
 
 def modo_ia():
