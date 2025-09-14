@@ -33,6 +33,13 @@ llm_client = OpenAI(
   api_key="ollama"  # placeholder, Ollama não exige autenticação
 )
 
+RUN_LOCAL_LLM = os.getenv("RUN_LOCAL_LLM", "false").lower = "true"
+
+if RUN_LOCAL_LLM:
+    print("⚠️ Rodando LLM local")
+else:
+    print("✅ LLM local desativado")
+
 def modo_ia():
     """Retorna qual modo de IA usar a partir do MongoDB"""
     config = config_col.find_one({})
@@ -175,7 +182,7 @@ def processar_curriculo(curriculo):
     vagas = list(vagas_col.find())
     modo = modo_ia()
 
-    if modo == "LLM_LOCAL":
+    if modo == "LLM_LOCAL" and RUN_LOCAL_LLM:
         print("🤖 Usando LLM local (Ollama/LLaMA3)")
         return processar_com_llm_local(texto, vagas)
     elif modo == "LLM_API":
