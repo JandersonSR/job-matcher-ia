@@ -3,3 +3,4 @@ sentence-transformers
 torch
 python-dotenv
 openai
+requests
