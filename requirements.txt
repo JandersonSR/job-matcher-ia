@@ -22,3 +22,10 @@ lxml==4.9.3
 
 # Progresso
 tqdm==4.66.1
+
+# Web framework
+fastapi==0.100.0
+uvicorn[standard]==0.23.2
+
+# Cron
+apscheduler==3.10.1
