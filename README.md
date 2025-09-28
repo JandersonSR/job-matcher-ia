@@ -9,6 +9,18 @@
 ### Rodar o projeto
 > uvicorn main:app --reload
 
+### Se der erro rode no bash:
+python -m venv .venv
+source .venv/bin/activate   # Linux/Mac // Ou source .venv/Scripts/activate
+
+### ou no Windows PowerShell:
+> .venv\Scripts\Activate.ps1
+
+E rode novamente o comando:
+> uvicorn main:app --reload
+ou
+> python -m uvicorn main:app --reload
+
 ### Teste de endpoints
 #### health
 curl http://localhost:8000/health
