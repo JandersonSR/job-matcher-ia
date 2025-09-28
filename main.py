@@ -1,68 +1,29 @@
-# main.py
 import os
-import asyncio
-from fastapi import FastAPI, HTTPException
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from fastapi import FastAPI
+from apscheduler.schedulers.background import BackgroundScheduler
+from pymongo import MongoClient
 from dotenv import load_dotenv
-from jobs_runner import process_pending_once
 
+# Carregar variáveis do .env
 load_dotenv()
 
-CRON_SCHEDULE = os.getenv("CRON_SCHEDULE", "")  # ex: "0 */6 * * *" (cada 6h)
-PORT = int(os.getenv("PORT", 8000))
+# Conexão com MongoDB
+MONGO_URL = os.getenv("MONGO_URL")
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client["jobmatcher"]
 
-app = FastAPI(title="Job Matcher Worker")
+# Importa a função de jobs (ajuste o nome se diferente)
+from jobs import worker_loop
 
-# agendador global
-scheduler = AsyncIOScheduler()
-job_running = False  # flag simples para evitar reentrância
+# Cria app FastAPI
+app = FastAPI()
 
+# Inicia agendador
+scheduler = BackgroundScheduler()
+scheduler.add_job(worker_loop, "interval", minutes=5)  # roda a cada 5 minutos
+scheduler.start()
+
+# Rota de teste/saúde
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-@app.post("/run")
-async def run_now():
-    global job_running
-    if job_running:
-        raise HTTPException(status_code=409, detail="Job em execução")
-    job_running = True
-    try:
-        result = process_pending_once()
-        return result
-    finally:
-        job_running = False
-
-def cron_job_wrapper():
-    # Função chamada pelo scheduler (it is sync, APScheduler trata)
-    global job_running
-    if job_running:
-        print("Cron disparado, mas job já está em execução. Pulando.")
-        return
-    job_running = True
-    try:
-        r = process_pending_once()
-        print("Cron job result:", r)
-    except Exception as e:
-        print("Erro no cron job:", e)
-    finally:
-        job_running = False
-
-@app.on_event("startup")
-async def startup_event():
-    # se CRON_SCHEDULE definido, registra job
-    if CRON_SCHEDULE:
-        try:
-            trigger = CronTrigger.from_crontab(CRON_SCHEDULE)
-            scheduler.add_job(cron_job_wrapper, trigger)
-            scheduler.start()
-            print(f"Scheduler iniciado com CRON: {CRON_SCHEDULE}")
-        except Exception as e:
-            print("Erro ao registrar CRON:", e)
-    else:
-        print("CRON_SCHEDULE não definido; agendamento interno desativado.")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, log_level="info")
+def health():
+    return {"status": "ok", "message": "Job Matcher IA rodando no Render 🚀"}

@@ -33,7 +33,7 @@ llm_client = OpenAI(
   api_key="ollama"  # placeholder, Ollama não exige autenticação
 )
 
-RUN_LOCAL_LLM = os.getenv("RUN_LOCAL_LLM", "false").lower = "true"
+RUN_LOCAL_LLM = os.getenv("RUN_LOCAL_LLM", "false").lower() = "true"
 
 if RUN_LOCAL_LLM:
   print("⚠️ Rodando LLM local")
@@ -54,20 +54,19 @@ def processar_com_embeddings(texto, vagas):
 
   resultados = []
   for vaga in vagas:
-      descricao = vaga.get("descricao", "")
-      if not descricao:
-          continue
+    descricao = vaga.get("descricao", "")
+    if not descricao:
+      continue
 
-      embedding_vaga = embedding_model.encode(descricao, convert_to_tensor=True)
-      score = util.cos_sim(embedding_curriculo, embedding_vaga).item()
+    embedding_vaga = embedding_model.encode(descricao, convert_to_tensor=True)
+    score = util.cos_sim(embedding_curriculo, embedding_vaga).item()
 
-      resultados.append({
-          "vaga_id": str(vaga["_id"]),
-          "titulo": vaga.get("titulo", "Sem título"),
-          "empresa": vaga.get("empresa", "Desconhecida"),
-          "compatibilidade": round(float(score), 2)
-      })
-
+    resultados.append({
+      "vaga_id": str(vaga["_id"]),
+      "titulo": vaga.get("titulo", "Sem título"),
+      "empresa": vaga.get("empresa", "Desconhecida"),
+      "compatibilidade": round(float(score), 2)
+    })
   return sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)[:5]
 
 def processar_com_llm_local(texto, vagas):
@@ -135,44 +134,44 @@ Vaga:
 Responda apenas com um número decimal entre 0 e 1.
 """
 
-  try:
-    payload = {"inputs": prompt}
-    response = requests.post(HUGGINGFACE_API_URL, headers=HEADERS, json=payload, timeout=30)
-    response.raise_for_status()
-
-    result_text = response.json()
-
-    # Dependendo do modelo da Hugging Face, a resposta pode vir em diferentes formatos
-    if isinstance(result_text, list) and len(result_text) > 0:
-      # Alguns modelos retornam: [{"generated_text": "..."}]
-      text = result_text[0].get("generated_text", "").strip()
-    else:
-      text = str(result_text).strip()
-
-    # Tenta extrair número
     try:
-      score = float(text)
-    except:
-      score = 0.0
+      payload = {"inputs": prompt}
+      response = requests.post(HUGGINGFACE_API_URL, headers=HEADERS, json=payload, timeout=30)
+      response.raise_for_status()
 
-    resultados.append({
-      "vaga_id": str(vaga["_id"]),
-      "titulo": vaga.get("titulo", "Sem título"),
-      "empresa": vaga.get("empresa", "Desconhecida"),
-      "compatibilidade": round(score, 2)
-    })
+      result_text = response.json()
 
-  except Exception as e:
-    print(f"⚠️ Erro ao chamar LLM API: {e}")
-    resultados.append({
-      "vaga_id": str(vaga["_id"]),
-      "titulo": vaga.get("titulo", "Sem título"),
-      "empresa": vaga.get("empresa", "Desconhecida"),
-      "compatibilidade": 0.0
-    })
+      # Dependendo do modelo da Hugging Face, a resposta pode vir em diferentes formatos
+      if isinstance(result_text, list) and len(result_text) > 0:
+        # Alguns modelos retornam: [{"generated_text": "..."}]
+        text = result_text[0].get("generated_text", "").strip()
+      else:
+        text = str(result_text).strip()
 
-  # Ordena do mais compatível para o menos
-  return sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)[:5]
+      # Tenta extrair número
+      try:
+        score = float(text)
+      except:
+        score = 0.0
+
+      resultados.append({
+        "vaga_id": str(vaga["_id"]),
+        "titulo": vaga.get("titulo", "Sem título"),
+        "empresa": vaga.get("empresa", "Desconhecida"),
+        "compatibilidade": round(score, 2)
+      })
+
+    except Exception as e:
+      print(f"⚠️ Erro ao chamar LLM API: {e}")
+      resultados.append({
+        "vaga_id": str(vaga["_id"]),
+        "titulo": vaga.get("titulo", "Sem título"),
+        "empresa": vaga.get("empresa", "Desconhecida"),
+        "compatibilidade": 0.0
+      })
+
+    # Ordena do mais compatível para o menos
+    return sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)[:5]
 
 def processar_curriculo(curriculo):
   texto = curriculo.get("conteudo", "")
@@ -194,24 +193,23 @@ def processar_curriculo(curriculo):
 
 def worker_loop():
   """Loop do worker que processa currículos pendentes."""
-  while True:
-    curriculo = curriculos_col.find_one({"status": "pendente"})
-    if curriculo:
-      print(f"📄 Processando currículo {curriculo['_id']}...")
+  curriculo = curriculos_col.find_one({"status": "pendente"})
+  if curriculo:
+    print(f"📄 Processando currículo {curriculo['_id']}...")
 
-      # Extrair dados e calcular compatibilidade
-      resultado = processar_curriculo(curriculo)
+    # Extrair dados e calcular compatibilidade
+    resultado = processar_curriculo(curriculo)
 
-      # Atualizar no MongoDB
-      curriculos_col.update_one(
-        {"_id": curriculo["_id"]},
-        {"$set": {"status": "concluido", "resultado": resultado}}
-      )
+    # Atualizar no MongoDB
+    curriculos_col.update_one(
+      {"_id": curriculo["_id"]},
+      {"$set": {"status": "concluido", "resultado": resultado}}
+    )
 
-      print(f"✅ Currículo {curriculo['_id']} processado.")
-    else:
-      print("⏳ Nenhum currículo pendente. Aguardando...")
-      time.sleep(5)
+    print(f"✅ Currículo {curriculo['_id']} processado.")
+  else:
+    print("⏳ Nenhum currículo pendente. Aguardando...")
+    time.sleep(5)
 
-if __name__ == "__main__":
-  worker_loop()
+# if __name__ == "__main__":
+#   worker_loop()
