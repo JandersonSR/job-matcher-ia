@@ -1,44 +1,46 @@
 # Conexão com MongoDB
-pymongo==4.4.0
+pymongo
 
 # Embeddings com Sentence Transformers
-sentence-transformers==2.2.2
-transformers==4.43.0
-torch==2.2.0
-sentencepiece==0.1.99
+sentence-transformers
+transformers
+torch
+sentencepiece
 
 # LLM via Ollama ou OpenAI API
-openai==1.0.0
+openai>=1.0.0
 
 # Chamadas HTTP para API gratuita de LLM
-requests==2.31.0
+requests
 
 # Carregar variáveis de ambiente do .env
-python-dotenv==1.0.1
+python-dotenv
 
 # Scraping
-beautifulsoup4==4.13.5
-lxml==4.9.3
+beautifulsoup4
+lxml
 
 # Progresso
-tqdm==4.66.1
+tqdm
+
+huggingface_hub==0.16.4
+sentence-transformers
 
 # Web framework
-uvicorn[standard]==0.37.0
+uvicorn[standard]
 # Cron
-apscheduler==3.10.1
+apscheduler
 
-annotated-types==0.7.0
+annotated-types
 anyio
-click==8.3.0
-colorama==0.4.6
-exceptiongroup==1.3.0
-fastapi==0.117.1
-h11==0.16.0
-idna==3.10
-pydantic==2.11.9
-pydantic_core==2.33.2
-sniffio==1.3.1
-starlette==0.48.0
-typing-inspection==0.4.1
-typing_extensions==4.15.0
+click
+colorama
+exceptiongroup
+fastapi
+h11
+idna
+pydantic_core
+sniffio
+starlette
+typing-inspection
+typing_extensions

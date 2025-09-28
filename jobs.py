@@ -33,7 +33,7 @@ llm_client = OpenAI(
   api_key="ollama"  # placeholder, Ollama não exige autenticação
 )
 
-RUN_LOCAL_LLM = os.getenv("RUN_LOCAL_LLM", "false").lower() = "true"
+RUN_LOCAL_LLM = os.getenv("RUN_LOCAL_LLM", "false").lower() == "true"
 
 if RUN_LOCAL_LLM:
   print("⚠️ Rodando LLM local")
@@ -122,8 +122,8 @@ def processar_com_llm_api(texto, vagas):
       continue
 
     prompt = f"""
-Você é um especialista em RH.
-Compare o seguinte currículo com a vaga e dê uma pontuação de compatibilidade entre 0 e 1.
+Você é um especialista em Recrutamento e Seleção.
+Sua tarefa é avaliar a compatibilidade entre o seguinte currículo e a vaga e responder em formato JSON.
 
 Currículo:
 {texto}
@@ -131,12 +131,22 @@ Currículo:
 Vaga:
 {descricao}
 
-Responda apenas com um número decimal entre 0 e 1.
-"""
+Responda no seguinte formato JSON:
 
+{{
+  "compatibilidade": <número entre 0 e 1>,
+  "requisitos_atendidos": ["lista de requisitos que aparecem no currículo"],
+  "requisitos_nao_atendidos": ["lista de requisitos que estão na vaga mas não aparecem no currículo"],
+  "melhorias_sugeridas": ["cursos, habilidades ou pontos que o candidato pode desenvolver para aumentar a chance de ser aprovado"]
+}}
+
+Importante:
+- "compatibilidade" deve ser apenas um número decimal entre 0 e 1 (ex.: 0.75).
+- Não invente requisitos ou cursos que não estão na vaga.
+- Seja breve nas listas.
+"""
     try:
-      payload = {"inputs": prompt}
-      response = requests.post(HUGGINGFACE_API_URL, headers=HEADERS, json=payload, timeout=30)
+      response = requests.post(HUGGINGFACE_API_URL, headers=HEADERS, json={"inputs": prompt}, timeout=30)
       response.raise_for_status()
 
       result_text = response.json()
@@ -148,17 +158,26 @@ Responda apenas com um número decimal entre 0 e 1.
       else:
         text = str(result_text).strip()
 
-      # Tenta extrair número
+      # Tenta parsear JSON
       try:
-        score = float(text)
-      except:
+        result_json = json.loads(text)
+        score = float(result_json.get("compatibilidade", 0))
+        requisitos_atendidos = result_json.get("requisitos_atendidos", [])
+        requisitos_nao_atendidos = result_json.get("requisitos_nao_atendidos", [])
+        melhorias_sugeridas = result_json.get("melhorias_sugeridas", [])
+      except Exception as e:
+        print(f"⚠️ Erro ao parsear JSON do modelo: {e}")
         score = 0.0
+        requisitos_atendidos, requisitos_nao_atendidos, melhorias_sugeridas = [], [], []
 
       resultados.append({
         "vaga_id": str(vaga["_id"]),
         "titulo": vaga.get("titulo", "Sem título"),
         "empresa": vaga.get("empresa", "Desconhecida"),
-        "compatibilidade": round(score, 2)
+        "compatibilidade": round(score, 2),
+        "requisitos_atendidos": requisitos_atendidos,
+        "requisitos_nao_atendidos": requisitos_nao_atendidos,
+        "melhorias_sugeridas": melhorias_sugeridas
       })
 
     except Exception as e:
@@ -167,7 +186,10 @@ Responda apenas com um número decimal entre 0 e 1.
         "vaga_id": str(vaga["_id"]),
         "titulo": vaga.get("titulo", "Sem título"),
         "empresa": vaga.get("empresa", "Desconhecida"),
-        "compatibilidade": 0.0
+        "compatibilidade": 0.0,
+        "requisitos_atendidos": [],
+        "requisitos_nao_atendidos": [],
+        "melhorias_sugeridas": []
       })
 
     # Ordena do mais compatível para o menos
