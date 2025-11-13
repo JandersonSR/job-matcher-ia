@@ -135,6 +135,82 @@ def scrap_vagas_catho(max_pages=3):
 
     return vagas
 
+def scrap_vagas_indeed(max_pages=3):
+    print("[scrap_indeed] iniciando...")
+    base_url = "https://br.indeed.com/jobs?q=desenvolvedor&start={}"
+    vagas = []
+
+    for page in range(max_pages):
+        url = base_url.format(page * 10)
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200:
+                print(f"[Indeed] status {resp.status_code} em {url}")
+                continue
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            cards = soup.select("div.job_seen_beacon")
+
+            for card in cards:
+                titulo = _safe_get_text(card.find("h2"))
+                empresa = _safe_get_text(card.find("span", class_="companyName"))
+                descricao = _safe_get_text(card.find("div", class_="job-snippet"))
+                link = card.find("a", href=True)
+                link = "https://br.indeed.com" + link["href"] if link else url
+
+                if not titulo or not empresa:
+                    continue
+
+                doc = {
+                    "titulo": titulo,
+                    "empresa": empresa,
+                    "descricao": descricao,
+                    "url": link,
+                    "site": "Indeed"
+                }
+                doc["_uid"] = _make_id(titulo, empresa, "Indeed", link)
+                vagas_col.update_one({"_uid": doc["_uid"]}, {"$set": doc}, upsert=True)
+                vagas.append(doc)
+
+            print(f"[Indeed] Página {page+1} processada ({len(cards)} vagas)")
+            time.sleep(1)
+        except Exception as e:
+            print(f"[Indeed] erro em {url}: {e}")
+    return vagas
+
+def scrap_vagas_gupy(max_pages=1):
+    print("[scrap_gupy] iniciando...")
+    base_url = "https://portal.gupy.io/job-search/term=desenvolvedor"
+    vagas = []
+    try:
+        resp = requests.get(base_url, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        cards = soup.select("a[href*='/jobs/']")
+        for card in cards:
+            titulo = _safe_get_text(card.find("h2")) or _safe_get_text(card)
+            empresa = _safe_get_text(card.find("span", class_="job-company-name"))
+            descricao = _safe_get_text(card.find("p"))
+            link = card.get("href")
+
+            if not titulo or not link:
+                continue
+
+            doc = {
+                "titulo": titulo,
+                "empresa": empresa,
+                "descricao": descricao,
+                "url": link if link.startswith("http") else f"https://portal.gupy.io{link}",
+                "site": "Gupy"
+            }
+            doc["_uid"] = _make_id(titulo, empresa, "Gupy", link)
+            vagas_col.update_one({"_uid": doc["_uid"]}, {"$set": doc}, upsert=True)
+            vagas.append(doc)
+        print(f"[Gupy] vagas coletadas: {len(vagas)}")
+    except Exception as e:
+        print(f"[Gupy] erro: {e}")
+    return vagas
+
 def scrap_todos(max_pages=3):
     """
     Executa todos os scrapers e retorna a lista de vagas encontradas nesta execução.
@@ -142,10 +218,11 @@ def scrap_todos(max_pages=3):
     print("[scrap_todos] iniciando scraping de todos os sites...")
     vagas_infojobs = scrap_vagas_infojobs(max_pages=max_pages)
     vagas_catho = scrap_vagas_catho(max_pages=max_pages)
+    vagas_inded = scrap_vagas_indeed(max_pages=max_pages)
+    vagas_gupy = scrap_vagas_gupy(max_pages=1)
 
-    total = len(vagas_infojobs) + len(vagas_catho)
+    total = len(vagas_infojobs) + len(vagas_catho) + len(vagas_inded) + len(vagas_gupy)
     print(f"[scrap_todos] concluído. Total de vagas processadas (nesta execução): {total}")
-    return vagas_infojobs + vagas_catho
-
+    return vagas_infojobs + vagas_catho + vagas_inded + vagas_gupy
 if __name__ == "__main__":
     scrap_todos(max_pages=1)
