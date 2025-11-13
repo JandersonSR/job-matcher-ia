@@ -35,7 +35,7 @@ def processar_um_curriculo(curriculo_doc):
         if not texto:
             return []
 
-        # aqui: exemplo usando embeddings (melhore conforme sua lógica)
+        # usando embeddings
         emb_curr = embedding_model.encode(texto, convert_to_tensor=True)
 
         resultados = []
