@@ -223,7 +223,7 @@ def worker_run_once():
     Atualiza o documento com status e resultado.
     Retorna mensagem resumo para a rota.
     """
-    curriculo = curriculos_col.find_one({"status": "pendente"})
+    curriculo = curriculos_col.find_one_and_update({"status": "pendente"}, { "$set": { "status": "processando" } })
     if not curriculo:
         print("[worker_run_once] nenhum currículo pendente")
         return {"mensagem": "nenhum curriculo pendente"}
