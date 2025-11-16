@@ -242,20 +242,20 @@ def sanitizer_vagas_term(term: str) -> str:
     return term
 
 
-def extrair_profissao_principal(texto_curriculo: str, max_profissoes: int = 3) -> list[str]:
+def extrair_profissao_principal(texto_curriculo: str, max_profissoes: int = 5) -> list[str]:
     """
     Extrai até `max_profissoes` possíveis profissões de um currículo.
     Retorna uma lista de palavras únicas representando profissões.
     """
     prompt = f"""
-Extraia no minimo 2 e maximo {max_profissoes} possíveis profissões do currículo abaixo.
+Extraia no minimo 3 e maximo {max_profissoes} possíveis profissões do currículo abaixo.
 Retorne APENAS as palavras representando as profissões, separadas por vírgula,
 sem qualquer explicação ou texto adicional.
-
+Se encontrar profissões compostas, retorne duas profissões separadas e correlacionadas (ex: "Chefe de Cozinha" vira "Chefe, Cozinheira").
 Currículo:
 {texto_curriculo}
 
-Retorne no minimo 2 e no maximo {max_profissoes} profissões, separadas por vírgula:
+Retorne no minimo 3 e no maximo {max_profissoes} profissões, separadas por vírgula:
 """
     resp = _call_llm(prompt)
 
