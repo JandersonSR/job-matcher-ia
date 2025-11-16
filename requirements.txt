@@ -1,42 +1,60 @@
-# Conexão com MongoDB
-pymongo
+# ----------------------------
+# Núcleo
+# ----------------------------
+numpy==1.26.4
+pandas==2.1.4
 
-# Embeddings com Sentence Transformers
-sentence-transformers
-transformers
-torch
+# ----------------------------
+# Machine Learning / Embeddings
+# ----------------------------
+torch==2.1.2
+transformers==4.35.2
+sentence-transformers==2.2.2
 sentencepiece
+huggingface_hub==0.16.4
 
-# LLM via Ollama ou OpenAI API
+# ----------------------------
+# LLM (OpenAI/Ollama)
+# ----------------------------
 openai>=1.0.0
 
-# Chamadas HTTP para API gratuita de LLM
-requests
-
-# Carregar variáveis de ambiente do .env
-python-dotenv
-
+# ----------------------------
 # Scraping
+# ----------------------------
 beautifulsoup4
 lxml
+requests
 
-# Progresso
+# ----------------------------
+# MongoDB
+# ----------------------------
+pymongo
+
+# ----------------------------
+# Utilidades
+# ----------------------------
+python-dotenv
 tqdm
 
-huggingface_hub==0.16.4
-sentence-transformers
-
-# Web framework
+# ----------------------------
+# Web API
+# ----------------------------
+fastapi
 uvicorn[standard]
-# Cron
+
+# ----------------------------
+# Scheduler
+# ----------------------------
 apscheduler
 
+# ----------------------------
+# Dependências auxiliares
+# ----------------------------
 annotated-types
 anyio
 click
 colorama
 exceptiongroup
-fastapi
 h11
 idna
 pydantic_core

@@ -37,3 +37,51 @@ def processar_curriculos():
         return {"status": "ok", "detalhe": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+
+@app.get("/comparar/misto")
+def comparar_misto(email: str):
+    """
+    Dispara o processamento de um currículo pendente (um por vez).
+    Chamado por servidor externo via HTTP.
+    """
+    try:
+        from jobs import worker_comparar_misto
+        result = worker_comparar_misto(email)
+        return {"status": "ok", "detalhe": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+
+@app.get("/comparar/llm")
+def comparar_llm(email: str):
+    """
+    Dispara o processamento de um currículo pendente (um por vez).
+    Chamado por servidor externo via HTTP.
+    """
+    try:
+        from jobs import worker_comparar_llm
+        result = worker_comparar_llm(email)
+        return {"status": "ok", "detalhe": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+
+@app.get("/comparar/embeddings")
+def comparar_embeddings(email: str = ""):
+    """
+    Dispara o processamento de um currículo pendente (um por vez).
+    Chamado por servidor externo via HTTP.
+    """
+    try:
+        from jobs import worker_comparar_embeddings
+        result = worker_comparar_embeddings(email)
+        return {"status": "ok", "detalhe": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+
+if __name__ == "__main__":
+    import uvicorn
+
+    IP = os.getenv("IP", "0.0.0.0")
+    PORT = int(os.getenv("PORT", 8000))
+
+    print(f"🚀 Servidor Python rodando em http://{IP}:{PORT}")
+    uvicorn.run("main:app", host=IP, port=PORT, reload=False)

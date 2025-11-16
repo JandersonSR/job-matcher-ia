@@ -1,10 +1,18 @@
-# jobs.py
 import os
 import json
 import time
 import requests
 from dotenv import load_dotenv
 import pymongo
+import re
+import unicodedata
+
+from openai import OpenAI
+
+from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import util
+from sklearn.metrics.pairwise import cosine_similarity
+from webscrapping_vagas_multi import scrap_vagascom
 
 load_dotenv()
 
@@ -18,48 +26,118 @@ client = pymongo.MongoClient(MONGO_URL)
 db = client[DB_NAME]
 curriculos_col = db["curriculos"]
 vagas_col = db["vagas"]
-config_col = db["aiConfig"]
 
-# Hugging Face API (opcional)
+# Hugging Face API
 HUGGINGFACE_API_URL = os.getenv("HUGGINGFACE_API_URL")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 HEADERS = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"} if HUGGINGFACE_API_KEY else {}
 
-# Embeddings (local)
-from sentence_transformers import SentenceTransformer, util
+# Embeddings
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# LLM local (Ollama) — opcional
-from openai import OpenAI
+# LLM Local (Ollama)
 RUN_LOCAL_LLM = os.getenv("RUN_LOCAL_LLM", "false").lower() == "true"
+
 llm_client = None
 if RUN_LOCAL_LLM:
-    # Assumindo Ollama rodando localmente na porta 11434
     llm_client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
     print("⚠️ LLM local habilitado (Ollama)")
 
-def modo_ia():
-    config = config_col.find_one({})
-    if config:
-        return config.get("modoIA", "EMBEDDINGS")
-    return "EMBEDDINGS"
+
+# ============================================================
+#  EMBEDDINGS
+# ============================================================
+
+SIM_THRESHOLD = 0.55   # LIMIAR DE SIMILARIDADE PARA CONSIDERAR "ATENDIDO"
+
+def extrair_requisitos(texto_descricao):
+    """
+    Divide a descrição da vaga em possíveis requisitos com base em quebras de linha e tópicos.
+    """
+    linhas = texto_descricao.split("\n")
+    requisitos = []
+
+    for linha in linhas:
+        linha = linha.strip("-•* \t").strip()
+        if len(linha) > 3:
+            requisitos.append(linha)
+
+    return requisitos
+
+
+def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
+    """
+    Compara cada requisito com o embedding das habilidades do currículo.
+    """
+    requisitos_atendidos = []
+    requisitos_nao_atendidos = []
+
+    for req_text, req_emb in requisitos:
+        sims = cosine_similarity([req_emb], habilidades_curriculo_embeddings)[0]
+        max_sim = max(sims)
+
+        if max_sim >= SIM_THRESHOLD:
+            requisitos_atendidos.append(req_text)
+        else:
+            requisitos_nao_atendidos.append(req_text)
+
+    return requisitos_atendidos, requisitos_nao_atendidos
+
+
+def gerar_melhorias(requisitos_nao_atendidos):
+    """
+    Gera textos simples de melhoria com base nos requisitos não atendidos.
+    """
+    return [
+        f"Adicionar experiência com {req.lower()}."
+        for req in requisitos_nao_atendidos
+    ]
+
 
 def processar_com_embeddings(texto, vagas, top_k=10):
     """
-    Retorna top_k vagas (lista de dicts) ordenadas por similaridade por cosine
+    Retorna top_k vagas (lista de dicts) ordenadas por similaridade.
+    Agora inclui: requisitos_atendidos, requisitos_nao_atendidos, melhorias_sugeridas
     """
     if not vagas:
         return []
 
+    # 🔹 Embedding do texto do currículo inteiro
     embedding_curriculo = embedding_model.encode(texto, convert_to_tensor=True)
+
+    # 🔹 Quebra o currículo em pequenas frases (habilidades)
+    habilidades = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
+    habilidades_emb = embedding_model.encode(habilidades)
+
     resultados = []
 
     for vaga in vagas:
         descricao = vaga.get("descricao", "") or vaga.get("titulo", "")
         if not descricao:
             continue
+
+        # 🔹 Embedding da vaga inteira (compatibilidade geral)
         embedding_vaga = embedding_model.encode(descricao, convert_to_tensor=True)
         score = util.cos_sim(embedding_curriculo, embedding_vaga).item()
+
+        # 🔹 EXTRAÇÃO DE REQUISITOS
+        req_text_list = extrair_requisitos(descricao)
+
+        # Embeddings individuais de cada requisito
+        req_embeddings = embedding_model.encode(req_text_list)
+
+        # Associa cada requisito ao embedding
+        requisitos_pairs = list(zip(req_text_list, req_embeddings))
+
+        # 🔹 COMPARAÇÃO COM O CURRÍCULO
+        requisitos_atendidos, requisitos_nao_atendidos = comparar_requisitos(
+            requisitos_pairs,
+            habilidades_emb
+        )
+
+        # 🔹 MELHORIAS
+        melhorias = gerar_melhorias(requisitos_nao_atendidos)
+
         resultados.append({
             "vaga_id": vaga.get("_uid") or str(vaga.get("_id")),
             "titulo": vaga.get("titulo", "Sem título"),
@@ -67,110 +145,192 @@ def processar_com_embeddings(texto, vagas, top_k=10):
             "descricao": descricao,
             "url": vaga.get("url"),
             "site": vaga.get("site", "Desconhecido"),
-            "compatibilidade": float(score)
+            "compatibilidade": round(float(score), 4),
+
+            # 🔹 NOVOS CAMPOS
+            "requisitos_atendidos": requisitos_atendidos,
+            "requisitos_nao_atendidos": requisitos_nao_atendidos,
+            "melhorias_sugeridas": melhorias,
         })
 
     resultados = sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)
-    # normaliza pontuação para 0..1 (opcional) ou mantemos como está. Mantemos como está e arredondamos depois.
-    for r in resultados:
-        r["compatibilidade"] = round(r["compatibilidade"], 4)
     return resultados[:top_k]
 
-def _call_huggingface(prompt, timeout=30, retries=2):
+# ============================================================
+#  LLM API (HuggingFace)
+# ============================================================
+def _call_huggingface(prompt, timeout=30, retries=1):
     """
-    Chamada robusta para HuggingFace Inference API (ou outro endpoint que o usuário passar).
-    Retorna string gerada.
+    Agora usando GPT-4o-mini via OpenAI API, no formato compatível com chat
     """
-    if not HUGGINGFACE_API_URL:
-        raise RuntimeError("HUGGINGFACE_API_URL não configurado")
+
+    # sua variável no .env deve ser: OPENAI_API_KEY
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY não configurado")
+
+    url = "https://api.openai.com/v1/chat/completions"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
     for attempt in range(retries + 1):
+
         try:
-            resp = requests.post(HUGGINGFACE_API_URL, headers=HEADERS, json={"inputs": prompt}, timeout=timeout)
+            body = {
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 400,
+                "temperature": 0.4
+            }
+
+            resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+
+            return data["choices"][0]["message"]["content"]
+
         except Exception as e:
-            print(f"[HF] tentativa {attempt+1} falhou: {e}")
-            time.sleep(2 + attempt * 2)
-    raise RuntimeError("Hugging Face API falhou após retries")
+            print(f"[GPT] Tentativa {attempt + 1} falhou: {e}")
+            time.sleep(1 + attempt * 2)
+
+    raise RuntimeError("OpenAI API falhou após múltiplas tentativas")
+
 
 def _extract_text_from_hf_response(resp_json):
-    """
-    Extrai texto gerado de diferentes formatos de resposta HF.
-    """
-    if isinstance(resp_json, list) and len(resp_json) > 0:
+    if isinstance(resp_json, list) and resp_json:
         first = resp_json[0]
         if isinstance(first, dict):
-            # comum: {"generated_text": "..."}
-            return first.get("generated_text") or first.get("generated_text", "") or json.dumps(first)
-        # fallback
+            return first.get("generated_text") or json.dumps(first)
         return str(first)
     return str(resp_json)
 
-def processar_com_llm_api(texto, vagas):
+def reduzir_profissao(profissao: str) -> str:
+    if not profissao:
+        return ""
+
+    STOP_WORDS = [
+        "responsavel", "responsável", "pleno", "junior", "júnior", "senior", "sênior",
+        "assistente", "lider", "líder", "especialista",
+        "técnico", "tecnico"
+    ]
+
+    p = profissao.lower()
+    p = unicodedata.normalize("NFD", p).encode("ascii", "ignore").decode("utf-8")
+    palavras = p.split()
+
+    palavras_filtradas = [w for w in palavras if w not in STOP_WORDS]
+
+    if not palavras_filtradas:
+        return palavras[0]
+
+    return palavras_filtradas[0]
+
+def sanitizer_vagas_term(term: str) -> str:
+    term = term.strip().lower()
+    term = term.replace(" ", "-")
+    term = re.sub(r"[^a-z0-9\-]+", "", term)
+    return term
+
+
+def extrair_profissao_principal(texto_curriculo: str) -> str:
+    prompt = f"""
+Extraia SOMENTE a profissão principal do currículo abaixo.
+Retorne apenas UMA palavra representando a profissão, exemplo: 'desenvolvedor', 'analista', 'gerente', 'chefe'.
+
+Currículo:
+{texto_curriculo}
+
+Retorne APENAS a profissão:
+"""
+
+    resp = _call_huggingface(prompt)
+    profissao = resp.strip().split()[0]  # pega só a primeira palavra
+    return profissao
+
+def processar_com_llm(texto, vagas):
     """
-    Usa LLM via HuggingFace API para analisar cada vaga e retornar JSON com compatibilidade e explicações.
-    Recebe vagas já filtradas (ex: top 10 por embeddings).
+    Avaliação usando LLM para cada vaga já filtrada.
     """
     resultados = []
 
-    if not vagas:
-        return resultados
-
     for vaga in vagas:
-        descricao = vaga.get("descricao", "") or vaga.get("titulo", "")
+        descricao = vaga.get("descricao") or vaga.get("titulo", "")
+
         prompt = f"""
 Você é um especialista em Recrutamento e Seleção.
-Avalie a compatibilidade entre o currículo e a vaga. Retorne APENAS um JSON válido com as chaves:
-- compatibilidade: número decimal entre 0 e 1
-- requisitos_atendidos: lista curta de requisitos encontrados no currículo
-- requisitos_nao_atendidos: lista curta de requisitos da vaga que NÃO aparecem no currículo
-- melhorias_sugeridas: lista curta de sugestões (cursos, habilidades) reais e relevantes
 
-Currículo:
+Analise cuidadosamente a VAGA e extraia uma lista de REQUISITOS a partir dela
+(somente itens realmente mencionados no texto).
+
+Depois, compare cada requisito com o CURRÍCULO.
+
+REGRAS IMPORTANTES:
+- NÃO invente requisitos. Use apenas o que está escrito na vaga.
+- NÃO invente habilidades do currículo.
+- Não inclua comentários fora do JSON.
+- Sempre calcule compatibilidade entre o currículo e a vaga retornando um número entre 0 e 1, como: 0.8. Nunca enviar 0 nem 1 como compatibilidade.
+
+CURRÍCULO:
 {texto}
 
-Vaga:
+VAGA:
 {descricao}
 
-EXEMPLO DE SAÍDA:
-{{"compatibilidade": 0.73, "requisitos_atendidos":["Python","REST"], "requisitos_nao_atendidos":["Docker"], "melhorias_sugeridas":["Curso Docker básico"]}}
+
+Retorne APENAS um JSON válido SEM texto fora do JSON. Exemplo de saída:
+{{"compatibilidade": 0.73, "requisitos_atendidos":["Python"], "requisitos_nao_atendidos":["Docker"], "melhorias_sugeridas":["Curso Docker básico"]}}
 """
+
+        # fallback seguro para ID da vaga
+        vaga_id = vaga.get("vaga_id") or vaga.get("_uid") or None
+
         try:
             resp_json = _call_huggingface(prompt)
-            text = _extract_text_from_hf_response(resp_json)
-            # tentar extrair JSON da string gerada
+            raw = _extract_text_from_hf_response(resp_json)
+
+            # tenta extrair trecho JSON
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1:
+                json_text = raw[start:end+1]
+            else:
+                json_text = raw
+
             try:
-                # às vezes o modelo retorna texto extra; procurar primeira ocorrência de '{' ... '}'
-                start = text.find("{")
-                end = text.rfind("}")
-                if start != -1 and end != -1:
-                    json_text = text[start:end+1]
-                else:
-                    json_text = text
                 parsed = json.loads(json_text)
-                score = float(parsed.get("compatibilidade", 0))
-                req_ok = parsed.get("requisitos_atendidos", [])
-                req_not = parsed.get("requisitos_nao_atendidos", [])
-                sugest = parsed.get("melhorias_sugeridas", [])
-            except Exception as e:
-                print(f"[LLM_API] falha ao parsear JSON da resposta: {e}. Resposta bruta: {text}")
-                score, req_ok, req_not, sugest = 0.0, [], [], []
+            except:
+                parsed = {
+                    "compatibilidade": 0.0,
+                    "requisitos_atendidos": [],
+                    "requisitos_nao_atendidos": [],
+                    "melhorias_sugeridas": []
+                }
 
             resultados.append({
-                "vaga_id": vaga.get("vaga_id") or vaga.get("vaga_id") or vaga.get("vaga_id"),
+                "json_text": json_text,
+                "parsed": parsed,
+                "vaga_id": vaga_id,
                 "titulo": vaga.get("titulo"),
                 "empresa": vaga.get("empresa"),
                 "url": vaga.get("url"),
                 "site": vaga.get("site"),
-                "compatibilidade": round(float(score), 2),
-                "requisitos_atendidos": req_ok,
-                "requisitos_nao_atendidos": req_not,
-                "melhorias_sugeridas": sugest
+                "compatibilidade": round(float(parsed.get("compatibilidade", 0)), 2),
+                "requisitos_atendidos": parsed.get("requisitos_atendidos", []),
+                "requisitos_nao_atendidos": parsed.get("requisitos_nao_atendidos", []),
+                "melhorias_sugeridas": parsed.get("melhorias_sugeridas", [])
             })
+
         except Exception as e:
-            print(f"[LLM_API] erro ao avaliar vaga {vaga.get('titulo')}: {e}")
+            print(f"[LLM] erro ao processar vaga {vaga.get('titulo')}: {e}")
+
             resultados.append({
-                "vaga_id": vaga.get("vaga_id") or vaga.get("_uid"),
+                "vaga_id": vaga_id,
                 "titulo": vaga.get("titulo"),
                 "empresa": vaga.get("empresa"),
                 "compatibilidade": 0.0,
@@ -179,58 +339,196 @@ EXEMPLO DE SAÍDA:
                 "melhorias_sugeridas": []
             })
 
+    # ordena por compatibilidade
     resultados = sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)
+
     return resultados[:5]
 
-def processar_curriculo_dict(curriculo_doc):
-    """
-    Pipeline híbrido: triagem embeddings -> refinamento LLM API (se configurado).
-    Retorna lista de resultados.
-    """
-    texto = curriculo_doc.get("conteudo", "") or curriculo_doc.get("texto", "")
-    if not texto:
-        return []
 
-    # pegar todas as vagas do banco
+# ============================================================
+#  MODOS DE COMPARAÇÃO
+# ============================================================
+def comparar_por_embeddings(texto):
     vagas = list(vagas_col.find())
-    # triagem embeddings
-    top_vagas = processar_com_embeddings(texto, vagas, top_k=10)
-    print(f"[processar_curriculo] triagem com embeddings finalizada — top {len(top_vagas)} vagas")
+    return processar_com_embeddings(texto, vagas, top_k=10)
 
-    modo = modo_ia()
-    if modo == "LLM_API" and HUGGINGFACE_API_URL:
-        print("[processar_curriculo] refinando com LLM via API (Hugging Face)...")
-        return processar_com_llm_api(texto, top_vagas)
-    elif modo == "LLM_LOCAL" and RUN_LOCAL_LLM and llm_client:
-        # Aqui poderia chamar processar_com_llm_local (não implementado em detalhe)
-        print("[processar_curriculo] modo LLM_LOCAL ativado — mas atualmente não implementado aqui")
-        return processar_com_embeddings(texto, vagas, top_k=5)  # fallback
-    else:
-        print("[processar_curriculo] retornando resultado apenas de embeddings (modo EMBEDDINGS)")
-        # converte para formato de exibição simples
-        return [{
-            "vaga_id": v.get("vaga_id") if v.get("vaga_id") else v.get("vaga_id"),
-            "titulo": v["titulo"],
-            "empresa": v["empresa"],
-            "compatibilidade": round(float(v["compatibilidade"]), 2),
-            "url": v.get("url"),
-            "site": v.get("site")
-        } for v in top_vagas]
 
+def comparar_por_llm(texto):
+    vagas = list(vagas_col.find().limit(5))
+    # top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+    return processar_com_llm(texto, vagas)
+
+
+def comparar_misto(texto):
+    vagas = list(vagas_col.find())
+
+    if not vagas or len(vagas) < 5:
+        print("[IA] Poucas vagas no banco — tentando buscar novas no Vagas.com")
+
+        profissao = extrair_profissao_principal(texto)
+        profissao_nucleo = reduzir_profissao(profissao)
+        term = sanitizer_vagas_term(profissao_nucleo)
+
+        print(f"[IA] Profissão detectada: {profissao} → núcleo: {profissao_nucleo} → slug: {term}")
+
+        novas = scrap_vagascom(term=term, max_pages=3)
+
+        print(f"[IA] {len(novas)} novas vagas coletadas para '{term}'")
+
+        vagas = list(vagas_col.find())
+
+
+# ============================================================
+#  WORKER para processar currículos pendentes
+# ============================================================
 def worker_run_once():
-    """
-    Processa um único currículo pendente (status == "pendente").
-    Atualiza o documento com status e resultado.
-    Retorna mensagem resumo para a rota.
-    """
-    curriculo = curriculos_col.find_one_and_update({"status": "pendente"}, { "$set": { "status": "processando" } })
+    curriculo = curriculos_col.find_one_and_update(
+        {"status": "pendente"},
+        {"$set": {"status": "processando"}}
+    )
+
     if not curriculo:
-        print("[worker_run_once] nenhum currículo pendente")
-        return {"mensagem": "nenhum curriculo pendente"}
+        print("[worker] nenhum currículo pendente")
+        return {"mensagem": "nenhum currículo pendente"}
 
-    print(f"[worker_run_once] processando currículo id={curriculo['_id']}")
-    resultado = processar_curriculo_dict(curriculo)
+    texto = curriculo.get("conteudo") or curriculo.get("texto", "")
+    if not texto:
+        curriculos_col.update_one(
+            {"_id": curriculo["_id"]},
+            {"$set": {"status": "erro", "resultado": []}}
+        )
+        return {"erro": "currículo sem texto"}
 
-    curriculos_col.update_one({"_id": curriculo["_id"]}, {"$set": {"status": "concluido", "resultado": resultado}})
-    print(f"[worker_run_once] currículo {curriculo['_id']} processado. resultados: {len(resultado)} vagas")
-    return {"mensagem": "curriculo processado", "curriculo_id": str(curriculo["_id"]), "top_resultados": len(resultado)}
+    # usa pipeline misto como padrão
+    resultado = comparar_misto(texto)
+
+    curriculos_col.update_one(
+        {"_id": curriculo["_id"]},
+        {"$set": {"status": "concluido", "resultado": resultado}}
+    )
+
+    return {
+        "mensagem": "processado",
+        "id": str(curriculo["_id"]),
+        "total_vagas": len(resultado)
+    }
+
+def worker_comparar_embeddings(email: str):
+    curriculo = curriculos_col.find_one_and_update(
+        {"email": email},
+        {"$set": {"status": "processando"}}
+    )
+
+    if not curriculo:
+        print("[worker] nenhum currículo pendente")
+        return {"mensagem": "nenhum currículo pendente"}
+
+    texto = curriculo.get("conteudo") or curriculo.get("texto", "")
+    if not texto:
+        curriculos_col.update_one(
+            {"_id": curriculo["_id"]},
+            {"$set": {"status": "erro"}}
+        )
+        return {"erro": "currículo sem texto"}
+
+    # usa pipeline misto como padrão
+    resultado = comparar_por_embeddings(texto)
+
+    curriculos_col.update_one(
+        {"_id": curriculo["_id"]},
+        {"$set": {"status": "concluido", "resultado": resultado}}
+    )
+
+    return {
+        "mensagem": "processado",
+        "id": str(curriculo["_id"]),
+        "total_vagas": len(resultado)
+    }
+
+def worker_comparar_llm(email: str):
+    curriculo = curriculos_col.find_one_and_update(
+        {"email": email},
+        {"$set": {"status": "processando"}}
+    )
+
+    if not curriculo:
+        print("[worker] nenhum currículo pendente")
+        return {"mensagem": "nenhum currículo pendente"}
+
+    texto = curriculo.get("conteudo") or curriculo.get("texto", "")
+    if not texto:
+        curriculos_col.update_one(
+            {"_id": curriculo["_id"]},
+            {"$set": {"status": "erro"}}
+        )
+        return {"erro": "currículo sem texto"}
+
+    # usa pipeline misto como padrão
+    resultado = comparar_por_llm(texto)
+
+    curriculos_col.update_one(
+        {"_id": curriculo["_id"]},
+        {"$set": {"status": "concluido", "resultado": resultado}}
+    )
+
+    return {
+        "mensagem": "processado",
+        "id": str(curriculo["_id"]),
+        "total_vagas": len(resultado)
+    }
+
+def worker_comparar_misto(email: str):
+    curriculo = curriculos_col.find_one_and_update(
+        {"email": email},
+        {"$set": {"status": "processando"}}
+    )
+
+    if not curriculo:
+        print("[worker] nenhum currículo pendente")
+        return {"mensagem": "nenhum currículo pendente"}
+
+    texto = curriculo.get("conteudo") or curriculo.get("texto", "")
+    if not texto:
+        curriculos_col.update_one(
+            {"_id": curriculo["_id"]},
+            {"$set": {"status": "erro"}}
+        )
+        return {"erro": "currículo sem texto"}
+
+    vagas = garantir_vagas_para_profissao(texto)
+
+    # usa pipeline misto como padrão
+    top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+    resultado = processar_com_llm(texto, top_vagas)
+
+    curriculos_col.update_one(
+        {"_id": curriculo["_id"]},
+        {"$set": {"status": "concluido", "resultado": resultado}}
+    )
+
+    return {
+        "mensagem": "processado",
+        "id": str(curriculo["_id"]),
+        "total_vagas": len(resultado)
+    }
+
+# Se não houver vagas suficientes para a profissão extraída do currículo,
+# realiza scraping adicional no Vagas.com para garantir variedade.
+def garantir_vagas_para_profissao(texto_curriculo):
+    # 1. Extrair profissão
+    profissao = extrair_profissao_principal(texto_curriculo)
+    print(f"[PROFISSÃO EXTRAÍDA] {profissao}")
+
+    # 2. Verificar se existe vaga dessa profissão no banco
+    vagas_existentes = list(vagas_col.find({"titulo": {"$regex": profissao, "$options": "i"}}))
+
+    if len(vagas_existentes) >= 5:
+        print(f"[OK] Já existem {len(vagas_existentes)} vagas para '{profissao}' no banco.")
+        return vagas_existentes
+
+    print(f"[SCRAP NECESSÁRIO] Buscando vagas de '{profissao}' no Vagas.com...")
+    novas = scrap_vagascom(term=profissao, max_pages=2)
+
+    print(f"[SCRAP FEITO] {len(novas)} vagas novas adicionadas.")
+
+    return list(vagas_col.find({"titulo": {"$regex": profissao, "$options": "i"}}))
