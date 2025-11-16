@@ -366,8 +366,8 @@ def comparar_por_llm(texto):
     # Filtra vagas onde título ou descrição contém a profissão
     vagas = list(vagas_col.find({
         "$or": [
-            {"titulo": {"$regex": pattern, "$options": "i"}},
-            {"descricao": {"$regex": pattern, "$options": "i"}}
+            {"titulo": pattern},
+            {"descricao": pattern}
         ]
     }).limit(5))
     print(f"[LLM] procurando vagas para profissão núcleo: '{len(vagas)}')")
@@ -384,8 +384,8 @@ def comparar_misto(texto):
     # Filtra vagas onde título ou descrição contém a profissão
     vagas = list(vagas_col.find({
         "$or": [
-            {"titulo": {"$regex": pattern, "$options": "i"}},
-            {"descricao": {"$regex": pattern, "$options": "i"}}
+            {"titulo": pattern},
+            {"descricao": pattern}
         ]
     }))
     # vagas = list(vagas_col.find())
@@ -556,8 +556,8 @@ def garantir_vagas_para_profissao(texto_curriculo):
     # 2. Verificar se existe vaga dessa profissão no banco
     vagas_existentes = list(vagas_col.find({
         "$or": [
-            {"titulo": {"$regex": pattern, "$options": "i"}},
-            {"descricao": {"$regex": pattern, "$options": "i"}}
+            {"titulo": pattern},
+            {"descricao": pattern}
         ]
     }))
 
@@ -572,7 +572,7 @@ def garantir_vagas_para_profissao(texto_curriculo):
 
     return list(vagas_col.find({
         "$or": [
-            {"titulo": {"$regex": pattern, "$options": "i"}},
-            {"descricao": {"$regex": pattern, "$options": "i"}}
+            {"titulo": pattern},
+            {"descricao": pattern}
         ]
     }))
