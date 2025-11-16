@@ -1,55 +1,29 @@
-# ----------------------------
-# Núcleo
-# ----------------------------
 numpy==1.26.4
 pandas==2.1.4
 
-# ----------------------------
-# Machine Learning / Embeddings
-# ----------------------------
-torch==2.1.2
-transformers==4.35.2
+# Embeddings - versão leve compatível com cloud
 sentence-transformers==2.2.2
-sentencepiece
-# huggingface_hub==0.16.4
 
-# ----------------------------
-# LLM (OpenAI/Ollama)
-# ----------------------------
+# Para não compilar sentencepiece (usa wheel oficial)
+sentencepiece==0.1.99
+
+transformers==4.35.2
+
 openai>=1.0.0
 
-# ----------------------------
-# Scraping
-# ----------------------------
 beautifulsoup4
 lxml
 requests
 
-# ----------------------------
-# MongoDB
-# ----------------------------
 pymongo
-
-# ----------------------------
-# Utilidades
-# ----------------------------
 python-dotenv
 tqdm
 
-# ----------------------------
-# Web API
-# ----------------------------
 fastapi
 uvicorn[standard]
 
-# ----------------------------
-# Scheduler
-# ----------------------------
 apscheduler
 
-# ----------------------------
-# Dependências auxiliares
-# ----------------------------
 annotated-types
 anyio
 click
