@@ -11,7 +11,7 @@ torch==2.1.2
 transformers==4.35.2
 sentence-transformers==2.2.2
 sentencepiece
-huggingface_hub==0.16.4
+# huggingface_hub==0.16.4
 
 # ----------------------------
 # LLM (OpenAI/Ollama)

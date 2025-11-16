@@ -159,7 +159,7 @@ def processar_com_embeddings(texto, vagas, top_k=10):
 # ============================================================
 #  LLM API (HuggingFace)
 # ============================================================
-def _call_huggingface(prompt, timeout=30, retries=1):
+def _call_llm(prompt, timeout=30, retries=1):
     """
     Agora usando GPT-4o-mini via OpenAI API, no formato compatível com chat
     """
@@ -249,7 +249,7 @@ Currículo:
 Retorne APENAS a profissão:
 """
 
-    resp = _call_huggingface(prompt)
+    resp = _call_llm(prompt)
     profissao = resp.strip().split()[0]  # pega só a primeira palavra
     return profissao
 
@@ -291,7 +291,7 @@ Retorne APENAS um JSON válido SEM texto fora do JSON. Exemplo de saída:
         vaga_id = vaga.get("vaga_id") or vaga.get("_uid") or None
 
         try:
-            resp_json = _call_huggingface(prompt)
+            resp_json = _call_llm(prompt)
             raw = _extract_text_from_hf_response(resp_json)
 
             # tenta extrair trecho JSON
