@@ -48,24 +48,28 @@ if RUN_LOCAL_LLM:
 #  EMBEDDINGS
 # ============================================================
 
-SIM_THRESHOLD = 0.4   # LIMIAR DE SIMILARIDADE PARA CONSIDERAR "ATENDIDO"
+SIM_THRESHOLD = 0.45   # LIMIAR DE SIMILARIDADE PARA CONSIDERAR "ATENDIDO"
 
 def extrair_requisitos(texto_descricao):
     """
     Divide a descrição da vaga em possíveis requisitos com base em quebras de linha e tópicos.
+    Retorna cada requisito como um item separado.
     """
     linhas = texto_descricao.split("\n")
     requisitos = []
-
     for linha in linhas:
         linha = linha.strip("-•* \t").strip()
         if len(linha) > 3:
-            requisitos.append(linha)
-
+            # quebra em pequenas habilidades, se houver vírgulas ou pontos
+            sub_reqs = [r.strip() for r in re.split(r",|;|\.", linha) if len(r.strip()) > 2]
+            requisitos.extend(sub_reqs)
     return requisitos
 
-
 def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
+    """
+    Compara cada requisito com o embedding das habilidades do currículo.
+    Retorna listas de requisitos atendidos e não atendidos.
+    """
     requisitos_atendidos = []
     requisitos_nao_atendidos = []
 
@@ -81,67 +85,63 @@ def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
         sims = util.cos_sim(req_emb, habilidades_curriculo_embeddings)
         max_sim = sims.max().item()
 
+        # quebra requisito em habilidades (palavras ou pequenas frases)
+        sub_reqs = [r.strip() for r in re.split(r",|;|\.", req_text) if len(r.strip()) > 2]
+
         if max_sim >= SIM_THRESHOLD:
-            requisitos_atendidos.append(req_text)
+            requisitos_atendidos.extend(sub_reqs)
         else:
-            requisitos_nao_atendidos.append(req_text)
+            requisitos_nao_atendidos.extend(sub_reqs)
 
     return requisitos_atendidos, requisitos_nao_atendidos
 
-
 def gerar_melhorias(requisitos_nao_atendidos):
     """
-    Gera textos simples de melhoria com base nos requisitos não atendidos.
+    Gera sugestões de melhoria separadas por habilidade.
     """
-    return [
-        f"Adicionar experiência com {req.lower()}."
-        for req in requisitos_nao_atendidos
-    ]
-
+    melhorias = []
+    for req in requisitos_nao_atendidos:
+        req = req.lower()
+        melhorias.append(f"Adicionar experiência com {req}.")
+    return melhorias
 
 def processar_com_embeddings(texto, vagas, top_k=10):
     """
-    Retorna top_k vagas (lista de dicts) ordenadas por similaridade.
-    Agora inclui: requisitos_atendidos, requisitos_nao_atendidos, melhorias_sugeridas
+    Processa o currículo contra vagas usando embeddings.
+    Retorna top_k vagas com compatibilidade, requisitos atendidos, não atendidos e melhorias.
     """
     if not vagas:
         return []
 
-    #  Embedding do texto do currículo inteiro
+    # Embedding do currículo
     embedding_curriculo = embedding_model.encode(texto, convert_to_tensor=True)
 
-    #  Quebra o currículo em pequenas frases (habilidades)
+    # Quebra currículo em pequenas habilidades
     habilidades = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
     habilidades_emb = embedding_model.encode(habilidades, convert_to_tensor=True)
 
     resultados = []
 
     for vaga in vagas:
-        descricao = vaga.get("titulo", "") + " " + vaga.get("descricao", "")
-
-        if not descricao.strip():
+        descricao = (vaga.get("titulo", "") + " " + vaga.get("descricao", "")).strip()
+        if not descricao:
             continue
 
-        # Embedding da vaga inteira (compatibilidade geral)
+        # Compatibilidade geral
         embedding_vaga = embedding_model.encode(descricao, convert_to_tensor=True)
         score = util.cos_sim(embedding_curriculo, embedding_vaga).item()
 
-        # EXTRAÇÃO DE REQUISITOS
+        # Extrai requisitos da vaga
         req_text_list = extrair_requisitos(descricao)
-
-        # Embeddings individuais de cada requisito
-        req_embeddings = embedding_model.encode(req_text_list)
-
-        # Associa cada requisito ao embedding
+        req_embeddings = embedding_model.encode(req_text_list, convert_to_tensor=True)
         requisitos_pairs = list(zip(req_text_list, req_embeddings))
 
-        # COMPARAÇÃO COM O CURRÍCULO
+        # Compara requisitos com currículo
         requisitos_atendidos, requisitos_nao_atendidos = comparar_requisitos(
             requisitos_pairs,
             habilidades_emb
         )
 
-        # MELHORIAS
         melhorias = gerar_melhorias(requisitos_nao_atendidos)
 
         resultados.append({
@@ -152,8 +152,6 @@ def processar_com_embeddings(texto, vagas, top_k=10):
             "url": vaga.get("url"),
             "site": vaga.get("site", "Desconhecido"),
             "compatibilidade": round(float(score), 4),
-
-            # NOVOS CAMPOS
             "requisitos_atendidos": requisitos_atendidos,
             "requisitos_nao_atendidos": requisitos_nao_atendidos,
             "melhorias_sugeridas": melhorias,
