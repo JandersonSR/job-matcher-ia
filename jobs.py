@@ -242,20 +242,28 @@ def sanitizer_vagas_term(term: str) -> str:
     return term
 
 
-def extrair_profissao_principal(texto_curriculo: str) -> str:
+def extrair_profissao_principal(texto_curriculo: str, max_profissoes: int = 3) -> list[str]:
+    """
+    Extrai até `max_profissoes` possíveis profissões de um currículo.
+    Retorna uma lista de palavras únicas representando profissões.
+    """
     prompt = f"""
-Extraia SOMENTE a profissão principal do currículo abaixo.
-Retorne apenas UMA palavra representando a profissão, exemplo: 'desenvolvedor', 'analista', 'gerente', 'chefe'.
+Extraia no minimo 2 e maximo {max_profissoes} possíveis profissões do currículo abaixo.
+Retorne APENAS as palavras representando as profissões, separadas por vírgula,
+sem qualquer explicação ou texto adicional.
 
 Currículo:
 {texto_curriculo}
 
-Retorne APENAS a profissão:
+Retorne no minimo 2 e no maximo {max_profissoes} profissões, separadas por vírgula:
 """
-
     resp = _call_llm(prompt)
-    profissao = resp.strip().split()[0]  # pega só a primeira palavra
-    return profissao
+
+    # Normaliza resposta: remove espaços extras e separa por vírgula
+    profissoes = [p.strip().lower() for p in resp.split(",") if p.strip()]
+
+    # Garante máximo de max_profissoes
+    return profissoes[:max_profissoes]
 
 def processar_com_llm(texto, vagas):
     """
@@ -358,55 +366,68 @@ def comparar_por_embeddings(texto):
 
 
 def comparar_por_llm(texto):
-    profissao = extrair_profissao_principal(texto)
-    profissao_nucleo = reduzir_profissao(profissao)
-    term = sanitizer_vagas_term(profissao_nucleo)
-    pattern = re.compile(re.escape(term), re.IGNORECASE)
-    print(f"[LLM] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
-    # Filtra vagas onde título ou descrição contém a profissão
-    vagas = list(vagas_col.find({
-        "$or": [
-            {"titulo": pattern},
-            {"descricao": pattern}
-        ]
-    }).limit(5))
-    print(f"[LLM] procurando vagas para profissão núcleo: '{len(vagas)}')")
-    # top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
-    return processar_com_llm(texto, vagas)
+    profissoes = extrair_profissao_principal(texto)
+    for profissao in profissoes:
+        profissao_nucleo = reduzir_profissao(profissao)
+        term = sanitizer_vagas_term(profissao_nucleo)
+        pattern = {"$regex": f".*{re.escape(term)}.*", "$options": "i"}
+        print(f"[LLM] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
+        # Filtra vagas onde título ou descrição contém a profissão
+        print(f"termo para busca: {pattern}")
+        vagas = list(vagas_col.find({
+            "$or": [
+                {"titulo": pattern},
+                {"descricao": pattern}
+            ]
+        }).limit(5))
+        print(f"[LLM] procurando vagas para profissão núcleo: '{len(vagas)}')")
+        # top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+        if len(vagas) == 0:
+            print("[LLM] Nenhuma vaga encontrada para essa profissão, tentando próxima...")
+            continue
+        return processar_com_llm(texto, vagas)
 
 
 def comparar_misto(texto):
-    profissao = extrair_profissao_principal(texto)
-    profissao_nucleo = reduzir_profissao(profissao)
-    term = sanitizer_vagas_term(profissao_nucleo)
-    pattern = re.compile(re.escape(term), re.IGNORECASE)
+    profissoes = extrair_profissao_principal(texto)
+    for profissao in profissoes:
 
-    # Filtra vagas onde título ou descrição contém a profissão
-    vagas = list(vagas_col.find({
-        "$or": [
-            {"titulo": pattern},
-            {"descricao": pattern}
-        ]
-    }))
-    # vagas = list(vagas_col.find())
-
-    if not vagas or len(vagas) < 5:
-        print("[IA] Poucas vagas no banco — tentando buscar novas no Vagas.com")
-
-        profissao = extrair_profissao_principal(texto)
         profissao_nucleo = reduzir_profissao(profissao)
         term = sanitizer_vagas_term(profissao_nucleo)
+        pattern = {"$regex": f".*{re.escape(term)}.*", "$options": "i"}
 
-        print(f"[IA] Profissão detectada: {profissao} → núcleo: {profissao_nucleo} → slug: {term}")
+        # Filtra vagas onde título ou descrição contém a profissão
+        print(f"termo para busca: {pattern}")
+        vagas = list(vagas_col.find({
+            "$or": [
+                {"titulo": pattern},
+                {"descricao": pattern}
+            ]
+        }))
+        # vagas = list(vagas_col.find())
 
-        novas = scrap_vagascom(term=term, max_pages=3)
+        if not vagas or len(vagas) < 2:
+            print("[IA] Poucas vagas no banco — tentando buscar novas no Vagas.com")
 
-        print(f"[IA] {len(novas)} novas vagas coletadas para '{term}'")
+            print(f"[IA] Profissão detectada: {profissao} → núcleo: {profissao_nucleo} → slug: {term}")
 
-        vagas = list(vagas_col.find())
+            novas = scrap_vagascom(term=term, max_pages=3)
 
-    top_vagas = processar_com_embeddings(texto, vagas, top_k=10)
-    return processar_com_llm(texto, top_vagas)
+            print(f"[IA] {len(novas)} novas vagas coletadas para '{term}'")
+
+            # Filtra vagas onde título ou descrição contém a profissão
+            print(f"termo para busca: {pattern}")
+            vagas = list(vagas_col.find({
+                "$or": [
+                    {"titulo": pattern},
+                    {"descricao": pattern}
+                ]
+            }))
+            if not vagas:
+                print("[IA] Ainda nenhuma vaga encontrada para essa profissão, tentando próxima...")
+                continue
+            top_vagas = processar_com_embeddings(texto, vagas, top_k=10)
+            return processar_com_llm(texto, top_vagas)
 
 
 # ============================================================
@@ -547,32 +568,37 @@ def worker_comparar_misto(email: str):
 # realiza scraping adicional no Vagas.com para garantir variedade.
 def garantir_vagas_para_profissao(texto_curriculo):
     # 1. Extrair profissão
-    profissao = extrair_profissao_principal(texto_curriculo)
-    profissao_nucleo = reduzir_profissao(profissao)
-    term = sanitizer_vagas_term(profissao_nucleo)
-    pattern = re.compile(re.escape(term), re.IGNORECASE)
-    print(f"[PROFISSÃO EXTRAÍDA] {profissao}")
-    print(f"[PROFISSÃO NÚCLEO] {profissao_nucleo}")
-    # 2. Verificar se existe vaga dessa profissão no banco
-    vagas_existentes = list(vagas_col.find({
-        "$or": [
-            {"titulo": pattern},
-            {"descricao": pattern}
-        ]
-    }))
+    profissoes = extrair_profissao_principal(texto_curriculo)
+    for profissao in profissoes:
 
-    if len(vagas_existentes) >= 5:
-        print(f"[OK] Já existem {len(vagas_existentes)} vagas para '{pattern}' no banco.")
-        return vagas_existentes
+        profissao_nucleo = reduzir_profissao(profissao)
+        term = sanitizer_vagas_term(profissao_nucleo)
+        pattern = {"$regex": f".*{re.escape(term)}.*", "$options": "i"}
+        {"$regex": f".*{re.escape(term)}.*", "$options": "i"}
+        print(f"[PROFISSÃO EXTRAÍDA] {profissao}")
+        print(f"[PROFISSÃO NÚCLEO] {profissao_nucleo}")
+        print(f"termo para busca: {pattern}")
+        # 2. Verificar se existe vaga dessa profissão no banco
+        vagas_existentes = list(vagas_col.find({
+            "$or": [
+                {"titulo": pattern},
+                {"descricao": pattern}
+            ]
+        }))
+        if len(vagas_existentes) >= 5:
+            print(f"[OK] Já existem {len(vagas_existentes)} vagas para '{pattern}' no banco.")
+            return vagas_existentes
 
-    print(f"[SCRAP NECESSÁRIO] Buscando vagas de '{profissao}' no Vagas.com...")
-    novas = scrap_vagascom(term=pattern, max_pages=2)
+        print(f"[SCRAP NECESSÁRIO] Buscando vagas de '{profissao}' no Vagas.com...")
+        novas = scrap_vagascom(term=pattern, max_pages=2)
 
-    print(f"[SCRAP FEITO] {len(novas)} vagas novas adicionadas.")
-
-    return list(vagas_col.find({
-        "$or": [
-            {"titulo": pattern},
-            {"descricao": pattern}
-        ]
-    }))
+        print(f"[SCRAP FEITO] {len(novas)} vagas novas adicionadas.")
+        print(f"termo para busca: {pattern}")
+        new_vaga = list(vagas_col.find({
+            "$or": [
+                {"titulo": pattern},
+                {"descricao": pattern}
+            ]
+        }))
+        if len(new_vaga) == 0:
+            continue
