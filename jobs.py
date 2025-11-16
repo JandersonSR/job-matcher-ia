@@ -398,6 +398,9 @@ def comparar_misto(texto):
 
         vagas = list(vagas_col.find())
 
+    top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+    return processar_com_llm(texto, top_vagas)
+
 
 # ============================================================
 #  WORKER para processar currículos pendentes
