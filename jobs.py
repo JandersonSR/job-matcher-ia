@@ -46,7 +46,7 @@ if RUN_LOCAL_LLM:
 #  EMBEDDINGS
 # ============================================================
 
-SIM_THRESHOLD = 0.55   # LIMIAR DE SIMILARIDADE PARA CONSIDERAR "ATENDIDO"
+SIM_THRESHOLD = 0.4   # LIMIAR DE SIMILARIDADE PARA CONSIDERAR "ATENDIDO"
 
 def extrair_requisitos(texto_descricao):
     """
@@ -64,14 +64,15 @@ def extrair_requisitos(texto_descricao):
 
 
 def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
-    """
-    Compara cada requisito com o embedding das habilidades do currículo.
-    """
     requisitos_atendidos = []
     requisitos_nao_atendidos = []
 
     for req_text, req_emb in requisitos:
-        sims = util.cos_sim([req_emb], habilidades_curriculo_embeddings)[0]
+        # garante que req_emb é 2D
+        if req_emb.ndim == 1:
+            req_emb = req_emb.unsqueeze(0)
+
+        sims = util.cos_sim(req_emb, habilidades_curriculo_embeddings)
         max_sim = sims.max().item()
 
         if max_sim >= SIM_THRESHOLD:
