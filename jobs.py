@@ -10,8 +10,6 @@ import unicodedata
 from openai import OpenAI
 
 from sentence_transformers import SentenceTransformer, util
-from sentence_transformers import util
-from sklearn.metrics.pairwise import cosine_similarity
 from webscrapping_vagas_multi import scrap_vagascom
 
 load_dotenv()
@@ -73,8 +71,8 @@ def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
     requisitos_nao_atendidos = []
 
     for req_text, req_emb in requisitos:
-        sims = cosine_similarity([req_emb], habilidades_curriculo_embeddings)[0]
-        max_sim = max(sims)
+        sims = util.cos_sim([req_emb], habilidades_curriculo_embeddings)[0]
+        max_sim = sims.max().item()
 
         if max_sim >= SIM_THRESHOLD:
             requisitos_atendidos.append(req_text)
@@ -116,11 +114,11 @@ def processar_com_embeddings(texto, vagas, top_k=10):
         if not descricao:
             continue
 
-        # 🔹 Embedding da vaga inteira (compatibilidade geral)
+        # Embedding da vaga inteira (compatibilidade geral)
         embedding_vaga = embedding_model.encode(descricao, convert_to_tensor=True)
         score = util.cos_sim(embedding_curriculo, embedding_vaga).item()
 
-        # 🔹 EXTRAÇÃO DE REQUISITOS
+        # EXTRAÇÃO DE REQUISITOS
         req_text_list = extrair_requisitos(descricao)
 
         # Embeddings individuais de cada requisito
@@ -129,13 +127,13 @@ def processar_com_embeddings(texto, vagas, top_k=10):
         # Associa cada requisito ao embedding
         requisitos_pairs = list(zip(req_text_list, req_embeddings))
 
-        # 🔹 COMPARAÇÃO COM O CURRÍCULO
+        # COMPARAÇÃO COM O CURRÍCULO
         requisitos_atendidos, requisitos_nao_atendidos = comparar_requisitos(
             requisitos_pairs,
             habilidades_emb
         )
 
-        # 🔹 MELHORIAS
+        # MELHORIAS
         melhorias = gerar_melhorias(requisitos_nao_atendidos)
 
         resultados.append({
@@ -147,7 +145,7 @@ def processar_com_embeddings(texto, vagas, top_k=10):
             "site": vaga.get("site", "Desconhecido"),
             "compatibilidade": round(float(score), 4),
 
-            # 🔹 NOVOS CAMPOS
+            # NOVOS CAMPOS
             "requisitos_atendidos": requisitos_atendidos,
             "requisitos_nao_atendidos": requisitos_nao_atendidos,
             "melhorias_sugeridas": melhorias,

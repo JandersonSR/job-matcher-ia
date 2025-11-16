@@ -3,7 +3,7 @@
 ### Para iniciar o projeto
 
 > python -m venv .venv
-> source .venv/bin/activate
+> source .venv/bin/activate ou source .venv/Scripts/activate
 > pip install -r requirements.txt
 
 ### Rodar o projeto

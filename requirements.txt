@@ -1,29 +1,34 @@
-numpy==1.26.4
-pandas==2.1.4
+# Conexão com MongoDB
+pymongo
 
-# Embeddings - versão leve compatível com cloud
-sentence-transformers==2.2.2
+# Embeddings com Sentence Transformers
+sentence-transformers
+transformers
+torch
+sentencepiece
 
-# Para não compilar sentencepiece (usa wheel oficial)
-sentencepiece==0.1.99
-
-torch==2.1.2+cpu
-
-transformers==4.35.2
-
+# LLM via Ollama ou OpenAI API
 openai>=1.0.0
 
-beautifulsoup4
-lxml
+# Chamadas HTTP para API gratuita de LLM
 requests
 
-pymongo
+# Carregar variáveis de ambiente do .env
 python-dotenv
+
+# Scraping
+beautifulsoup4
+lxml
+
+# Progresso
 tqdm
 
-fastapi
-uvicorn[standard]
+huggingface_hub==0.16.4
+sentence-transformers
 
+# Web framework
+uvicorn[standard]
+# Cron
 apscheduler
 
 annotated-types
@@ -31,6 +36,7 @@ anyio
 click
 colorama
 exceptiongroup
+fastapi
 h11
 idna
 pydantic_core
