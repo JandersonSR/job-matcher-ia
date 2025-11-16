@@ -2,13 +2,15 @@ import os
 import json
 import time
 import requests
+
+import torch
 from dotenv import load_dotenv
 import pymongo
 import re
 import unicodedata
 
 from openai import OpenAI
-
+import numpy as np
 from sentence_transformers import SentenceTransformer, util
 from webscrapping_vagas_multi import scrap_vagascom
 
@@ -68,7 +70,11 @@ def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
     requisitos_nao_atendidos = []
 
     for req_text, req_emb in requisitos:
-        # garante que req_emb é 2D
+        # garante que req_emb é tensor
+        if isinstance(req_emb, np.ndarray):
+            req_emb = torch.tensor(req_emb)
+
+        # transforma em [1, dim] se necessário
         if req_emb.ndim == 1:
             req_emb = req_emb.unsqueeze(0)
 
@@ -101,18 +107,19 @@ def processar_com_embeddings(texto, vagas, top_k=10):
     if not vagas:
         return []
 
-    # 🔹 Embedding do texto do currículo inteiro
+    #  Embedding do texto do currículo inteiro
     embedding_curriculo = embedding_model.encode(texto, convert_to_tensor=True)
 
-    # 🔹 Quebra o currículo em pequenas frases (habilidades)
+    #  Quebra o currículo em pequenas frases (habilidades)
     habilidades = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
-    habilidades_emb = embedding_model.encode(habilidades)
+    habilidades_emb = embedding_model.encode(habilidades, convert_to_tensor=True)
 
     resultados = []
 
     for vaga in vagas:
-        descricao = vaga.get("descricao", "") or vaga.get("titulo", "")
-        if not descricao:
+        descricao = vaga.get("titulo", "") + " " + vaga.get("descricao", "")
+
+        if not descricao.strip():
             continue
 
         # Embedding da vaga inteira (compatibilidade geral)
