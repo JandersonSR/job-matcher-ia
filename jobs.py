@@ -164,7 +164,7 @@ def _call_llm(prompt, timeout=30, retries=1):
     Agora usando GPT-4o-mini via OpenAI API, no formato compatível com chat
     """
 
-    # sua variável no .env deve ser: OPENAI_API_KEY
+    # OPENAI_API_KEY
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY não configurado")
