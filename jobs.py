@@ -352,13 +352,36 @@ def comparar_por_embeddings(texto):
 
 
 def comparar_por_llm(texto):
-    vagas = list(vagas_col.find().limit(5))
+    profissao = extrair_profissao_principal(texto)
+    profissao_nucleo = reduzir_profissao(profissao)
+    term = sanitizer_vagas_term(profissao_nucleo)
+    pattern = re.compile(re.escape(term), re.IGNORECASE)
+
+    # Filtra vagas onde título ou descrição contém a profissão
+    vagas = list(vagas_col.find({
+        "$or": [
+            {"titulo": {"$regex": pattern}},
+            {"descricao": {"$regex": pattern}}
+        ]
+    }).limit(5))
     # top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
     return processar_com_llm(texto, vagas)
 
 
 def comparar_misto(texto):
-    vagas = list(vagas_col.find())
+    profissao = extrair_profissao_principal(texto)
+    profissao_nucleo = reduzir_profissao(profissao)
+    term = sanitizer_vagas_term(profissao_nucleo)
+    pattern = re.compile(re.escape(term), re.IGNORECASE)
+
+    # Filtra vagas onde título ou descrição contém a profissão
+    vagas = list(vagas_col.find({
+        "$or": [
+            {"titulo": {"$regex": pattern}},
+            {"descricao": {"$regex": pattern}}
+        ]
+    }))
+    # vagas = list(vagas_col.find())
 
     if not vagas or len(vagas) < 5:
         print("[IA] Poucas vagas no banco — tentando buscar novas no Vagas.com")
