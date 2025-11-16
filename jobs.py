@@ -362,14 +362,15 @@ def comparar_por_llm(texto):
     profissao_nucleo = reduzir_profissao(profissao)
     term = sanitizer_vagas_term(profissao_nucleo)
     pattern = re.compile(re.escape(term), re.IGNORECASE)
-
+    print(f"[LLM] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
     # Filtra vagas onde título ou descrição contém a profissão
     vagas = list(vagas_col.find({
         "$or": [
-            {"titulo": {"$regex": pattern}},
-            {"descricao": {"$regex": pattern}}
+            {"titulo": {"$regex": pattern, "$options": "i"}},
+            {"descricao": {"$regex": pattern, "$options": "i"}}
         ]
     }).limit(5))
+    print(f"[LLM] procurando vagas para profissão núcleo: '{len(vagas)}')")
     # top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
     return processar_com_llm(texto, vagas)
 
@@ -383,8 +384,8 @@ def comparar_misto(texto):
     # Filtra vagas onde título ou descrição contém a profissão
     vagas = list(vagas_col.find({
         "$or": [
-            {"titulo": {"$regex": pattern}},
-            {"descricao": {"$regex": pattern}}
+            {"titulo": {"$regex": pattern, "$options": "i"}},
+            {"descricao": {"$regex": pattern, "$options": "i"}}
         ]
     }))
     # vagas = list(vagas_col.find())
@@ -404,7 +405,7 @@ def comparar_misto(texto):
 
         vagas = list(vagas_col.find())
 
-    top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+    top_vagas = processar_com_embeddings(texto, vagas, top_k=10)
     return processar_com_llm(texto, top_vagas)
 
 
@@ -547,18 +548,31 @@ def worker_comparar_misto(email: str):
 def garantir_vagas_para_profissao(texto_curriculo):
     # 1. Extrair profissão
     profissao = extrair_profissao_principal(texto_curriculo)
+    profissao_nucleo = reduzir_profissao(profissao)
+    term = sanitizer_vagas_term(profissao_nucleo)
+    pattern = re.compile(re.escape(term), re.IGNORECASE)
     print(f"[PROFISSÃO EXTRAÍDA] {profissao}")
-
+    print(f"[PROFISSÃO NÚCLEO] {profissao_nucleo}")
     # 2. Verificar se existe vaga dessa profissão no banco
-    vagas_existentes = list(vagas_col.find({"titulo": {"$regex": profissao, "$options": "i"}}))
+    vagas_existentes = list(vagas_col.find({
+        "$or": [
+            {"titulo": {"$regex": pattern, "$options": "i"}},
+            {"descricao": {"$regex": pattern, "$options": "i"}}
+        ]
+    }))
 
     if len(vagas_existentes) >= 5:
-        print(f"[OK] Já existem {len(vagas_existentes)} vagas para '{profissao}' no banco.")
+        print(f"[OK] Já existem {len(vagas_existentes)} vagas para '{pattern}' no banco.")
         return vagas_existentes
 
     print(f"[SCRAP NECESSÁRIO] Buscando vagas de '{profissao}' no Vagas.com...")
-    novas = scrap_vagascom(term=profissao, max_pages=2)
+    novas = scrap_vagascom(term=pattern, max_pages=2)
 
     print(f"[SCRAP FEITO] {len(novas)} vagas novas adicionadas.")
 
-    return list(vagas_col.find({"titulo": {"$regex": profissao, "$options": "i"}}))
+    return list(vagas_col.find({
+        "$or": [
+            {"titulo": {"$regex": pattern, "$options": "i"}},
+            {"descricao": {"$regex": pattern, "$options": "i"}}
+        ]
+    }))
