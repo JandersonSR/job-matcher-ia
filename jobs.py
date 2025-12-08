@@ -55,19 +55,13 @@ TOP_K_EMBEDDINGS = 10      # número de vagas consideradas via embeddings
 TOP_N_LLM = 3              # número de vagas que serão avaliadas pelo LLM
 SCRAP_MAX_PAGES = 2        # páginas a scrapear quando necessário
 
-# recomenda criar índices (executar uma vez)
-try:
-    vagas_col.create_index([("titulo", "text"), ("descricao", "text")])
-    scrap_cache_col.create_index("term", unique=True)
-    curriculos_col.create_index("doc_hash", unique=False)
-except Exception:
-    pass
-
-# -----------------------
-# UTIL: hash do currículo (para cache)
-# -----------------------
-def hash_curriculo(texto: str) -> str:
-    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+# # recomenda criar índices (executar uma vez)
+# try:
+#     vagas_col.create_index([("titulo", "text"), ("descricao", "text")])
+#     scrap_cache_col.create_index("term", unique=True)
+#     curriculos_col.create_index("email", unique=False)
+# except Exception:
+#     pass
 
 # -----------------------
 # UTIL: sanitizadores
@@ -483,9 +477,9 @@ Retorne APENAS um JSON válido SEM texto fora do JSON. Exemplo de saída:
 # ============================================================
 #  MODOS DE COMPARAÇÃO
 # ============================================================
-def comparar_por_embeddings(texto: str, top_k: int = TOP_K_EMBEDDINGS):
+def comparar_por_embeddings(email: str, texto: str, top_k: int = TOP_K_EMBEDDINGS):
     # buscar uma amostra de vagas relevantes (por texto) - aqui usamos text search simples com as profissões
-    profs = extrair_profissao_principal_cached(texto)
+    profs = extrair_profissao_principal_cached(email, texto)
     candidate_vagas = []
     for profissao in profs:
         nucleo = reduzir_profissao(profissao)
@@ -500,9 +494,9 @@ def comparar_por_embeddings(texto: str, top_k: int = TOP_K_EMBEDDINGS):
     # processar embeddings e retornar top_k
     return processar_com_embeddings(texto, candidate_vagas, top_k=top_k)
 
-def comparar_por_llm(texto: str):
+def comparar_por_llm(email: str, texto: str):
     # extrai profissões (cache-aware)
-    profissoes = extrair_profissao_principal_cached(texto)
+    profissoes = extrair_profissao_principal_cached(email, texto)
     for profissao in profissoes:
         profissao_nucleo = reduzir_profissao(profissao)
         term = sanitizer_vagas_term(profissao_nucleo)
@@ -602,7 +596,7 @@ def worker_comparar_embeddings(email: str):
         return {"erro": "currículo sem texto"}
 
     # usa pipeline misto como padrão
-    resultado = comparar_por_embeddings(texto)
+    resultado = comparar_por_embeddings(email, texto)
 
     curriculos_col.update_one(
         {"_id": curriculo["_id"]},
@@ -688,8 +682,8 @@ def worker_comparar_misto(email: str):
 # GARANTIR VAGAS PARA PROFISSÃO
 # - tenta no banco (filtro eficiente), se não houver -> usar scrap_cache -> scrap e inserir no banco
 # -----------------------
-def garantir_vagas_para_profissao(texto_curriculo: str, min_por_profissao: int = 5) -> List[dict]:
-    profissoes = extrair_profissao_principal_cached(texto_curriculo)
+def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_profissao: int = 5) -> List[dict]:
+    profissoes = extrair_profissao_principal_cached(email, texto_curriculo)
     todas_vagas = []
     for profissao in profissoes:
         nucleo = reduzir_profissao(profissao)
@@ -792,10 +786,9 @@ def garantir_vagas_para_profissao(texto_curriculo: str, min_por_profissao: int =
 # -----------------------
 # Helper: extrair profissões com cache no curriculo
 # -----------------------
-def extrair_profissao_principal_cached(texto_curriculo: str, max_profissoes: int = 5) -> List[str]:
+def extrair_profissao_principal_cached(email: str, texto_curriculo: str, max_profissoes: int = 5) -> List[str]:
     # tenta achar documento de currículo pelo hash
-    doc_hash = hash_curriculo(texto_curriculo)
-    curr = curriculos_col.find_one({"doc_hash": doc_hash}, {"profissoes_detectadas": 1})
+    curr = curriculos_col.find_one({"email": email}, {"profissoes_detectadas": 1})
     if curr and curr.get("profissoes_detectadas"):
         logging.info("[CACHE] Profissões encontradas no currículo (cache)")
         return curr["profissoes_detectadas"]
@@ -804,16 +797,15 @@ def extrair_profissao_principal_cached(texto_curriculo: str, max_profissoes: int
     profs = extrair_profissao_principal(texto_curriculo, max_profissoes=max_profissoes)
     # salva no documento do currículo (upsert baseado no hash)
     curriculos_col.update_one(
-        {"doc_hash": doc_hash},
-        {"$set": {"profissoes_detectadas": profs, "doc_hash": doc_hash, "last_profession_extract_ts": time.time()}},
+        {"email": email},
+        {"$set": {"profissoes_detectadas": profs, "email": email, "last_profession_extract_ts": time.time()}},
         upsert=True
     )
     logging.info("[LLM] Profissões extraídas e salvas no currículo")
     return profs
 
 # Função para forçar reextrair profissões (por exemplo se o usuário atualizou o currículo)
-def reextrair_e_salvar_profissoes(texto_curriculo: str):
-    doc_hash = hash_curriculo(texto_curriculo)
+def reextrair_e_salvar_profissoes(email: str, texto_curriculo: str):
     profs = extrair_profissao_principal(texto_curriculo, max_profissoes=5)
-    curriculos_col.update_one({"doc_hash": doc_hash}, {"$set": {"profissoes_detectadas": profs, "last_profession_extract_ts": time.time()}}, upsert=True)
+    curriculos_col.update_one({"email": email}, {"$set": {"profissoes_detectadas": profs, "last_profession_extract_ts": time.time()}}, upsert=True)
     return profs
