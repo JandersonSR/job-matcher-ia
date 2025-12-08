@@ -77,6 +77,13 @@ def comparar_embeddings(email: str = ""):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
 
+@app.get("/star-server")
+def star_server():
+    """
+    Rota para manter o servidor acordado (ping periódico).
+    """
+    return {"status": "ok", "message": "Servidor acordado 🚀"
+            }
 if __name__ == "__main__":
     import uvicorn
 
