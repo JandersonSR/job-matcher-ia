@@ -55,7 +55,7 @@ TOP_K_EMBEDDINGS = 10      # número de vagas consideradas via embeddings
 TOP_N_LLM = 3              # número de vagas que serão avaliadas pelo LLM
 SCRAP_MAX_PAGES = 2        # páginas a scrapear quando necessário
 
-# # recomenda criar índices (executar uma vez)
+# recomenda criar índices (executar uma vez)
 # try:
 #     vagas_col.create_index([("titulo", "text"), ("descricao", "text")])
 #     scrap_cache_col.create_index("term", unique=True)
@@ -474,6 +474,22 @@ Retorne APENAS um JSON válido SEM texto fora do JSON. Exemplo de saída:
     return resultados[:5]
 
 
+def buscar_vagas_rapido(term: str, limit: int = 50):
+    """
+    Busca vagas usando índice text em título e descrição.
+    Retorna no máximo 'limit' documentos.
+    """
+    term_sanitizado = term.strip().lower()
+
+    docs = list(
+        vagas_col.find(
+            {"$text": {"$search": term_sanitizado}},
+            {"titulo": 1, "descricao": 1, "url": 1, "empresa": 1, "site": 1, "embedding": 1}
+        ).limit(limit)
+    )
+    return docs
+
+
 # ============================================================
 #  MODOS DE COMPARAÇÃO
 # ============================================================
@@ -484,13 +500,12 @@ def comparar_por_embeddings(email: str, texto: str, top_k: int = TOP_K_EMBEDDING
     for profissao in profs:
         nucleo = reduzir_profissao(profissao)
         term = sanitizer_vagas_term(nucleo)
-        regex = re.compile(re.escape(term), re.IGNORECASE)
         # projeção leve (embedding pode existir)
-        docs = list(vagas_col.find({"$or": [{"titulo": regex}, {"descricao": regex}]}, {"titulo":1,"descricao":1,"url":1,"empresa":1,"site":1,"embedding":1}).limit(100))
+        docs = buscar_vagas_rapido(term, limit=50)
         candidate_vagas.extend(docs)
     # se poucos candidatos, pegar algumas vagas gerais (limitado)
     if not candidate_vagas:
-        candidate_vagas = list(vagas_col.find({}, {"titulo":1,"descricao":1,"url":1,"empresa":1,"site":1,"embedding":1}).limit(200))
+        candidate_vagas = list(vagas_col.find({}, {"titulo":1,"descricao":1,"url":1,"empresa":1,"site":1,"embedding":1}).limit(100))
     # processar embeddings e retornar top_k
     return processar_com_embeddings(texto, candidate_vagas, top_k=top_k)
 
@@ -500,11 +515,12 @@ def comparar_por_llm(email: str, texto: str):
     for profissao in profissoes:
         profissao_nucleo = reduzir_profissao(profissao)
         term = sanitizer_vagas_term(profissao_nucleo)
-        regex = re.compile(re.escape(term), re.IGNORECASE)
         logging.info(f"[LLM] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
-        vagas = list(vagas_col.find({
-            "$or": [{"titulo": regex}, {"descricao": regex}]
-        }).limit(5))
+
+        vagas_profissao =  buscar_vagas_otimizado(term, limit=5)
+
+        vagas = vagas_profissao if len(vagas_profissao) > 0 else garantir_vagas_para_profissao(email, texto, 0)
+
         if len(vagas) == 0:
             logging.info("[LLM] Nenhuma vaga encontrada para essa profissão, tentando próxima...")
             continue
@@ -522,7 +538,19 @@ def comparar_misto(email: str, texto: str, top_k_emb: int = 10, top_n_llm: int =
     """
     inicio = time.time()
     # 1) garantir vagas para profissões (busca no DB + scrap)
-    vagas = garantir_vagas_para_profissao(email, texto, min_por_profissao=3)
+
+    profissoes = extrair_profissao_principal_cached(email, texto)
+    vagas = []
+    for profissao in profissoes:
+        profissao_nucleo = reduzir_profissao(profissao)
+        term = sanitizer_vagas_term(profissao_nucleo)
+        logging.info(f"[LLM] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
+
+        vagas_profissao =  buscar_vagas_otimizado(term, limit=5)
+        if len(vagas_profissao) > 0 :
+            vagas = vagas_profissao
+        else:
+            vagas = garantir_vagas_para_profissao(email, texto, min_por_profissao=0)
 
     if not vagas:
         logging.info("[MIXTO] Nenhuma vaga encontrada após tentativas.")
@@ -564,8 +592,8 @@ def worker_run_once():
         )
         return {"erro": "currículo sem texto"}
 
-    # usa pipeline misto como padrão
-    resultado = comparar_misto(email, texto)
+    # usa pipeline llm como padrão
+    resultado = comparar_por_llm(email, texto)
 
     curriculos_col.update_one(
         {"_id": curriculo["_id"]},
@@ -597,7 +625,7 @@ def worker_comparar_embeddings(email: str):
         return {"erro": "currículo sem texto"}
 
     # usa pipeline misto como padrão
-    resultado = comparar_por_embeddings(email, texto)
+    resultado = comparar_por_embeddings_otimizado(email, texto) or comparar_por_embeddings(email, texto)
 
     curriculos_col.update_one(
         {"_id": curriculo["_id"]},
@@ -664,6 +692,7 @@ def worker_comparar_misto(email: str):
 
     # usa pipeline misto como padrão
     top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+    logging.info(f"[LLM] Processando com LLM - Misto para {len(top_vagas)} vagas")
     resultado = processar_com_llm(texto, top_vagas)
 
     curriculos_col.update_one(
@@ -689,9 +718,10 @@ def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_prof
     for profissao in profissoes:
         nucleo = reduzir_profissao(profissao)
         term = sanitizer_vagas_term(nucleo)
-
+        cache_regex = re.compile(re.escape(term), re.IGNORECASE)
         # busca no cache de scrapping primeiro (usando term normalizado)
-        cache = scrap_cache_col.find_one({"term": term})
+        logging.info(f"[CACHE] Buscando vagas cacheadas para '{cache_regex}'")
+        cache = scrap_cache_col.find_one({"term": cache_regex})
         if cache and cache.get("vagas"):
             logging.info(f"[CACHE] Usando vagas cacheadas para '{term}' ({len(cache['vagas'])})")
             # cache armazena os docs completos (ou pelo menos titulo/descricao/url)
@@ -724,11 +754,8 @@ def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_prof
             vagas_existentes = normalized
         else:
             # busca no DB com projeção para evitar transferir campos pesados
-            regex = re.compile(re.escape(term), re.IGNORECASE)
-            vagas_existentes = list(vagas_col.find(
-                {"$or": [{"titulo": regex}, {"descricao": regex}]},
-                {"titulo": 1, "descricao": 1, "url": 1, "empresa": 1, "site": 1, "embedding": 1}
-            ).limit(50))  # limitar scans
+            logging.info(f"[DB] ELSE Buscando vagas no DB para '{term}'")
+            vagas_existentes = buscar_vagas_otimizado(term, limit=50)  # limitar scans
 
         if len(vagas_existentes) >= min_por_profissao:
             logging.info(f"[OK] Encontradas {len(vagas_existentes)} vagas para '{term}' no DB")
@@ -738,7 +765,7 @@ def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_prof
         # se não tem vagas suficientes -> verificar scrap_cache para o termo (se não houve, scrap)
         if cache is None:
             logging.info(f"[SCRAP] Necessário scrap para termo '{term}'")
-            # scrap_vagascom espera term (string) - seu scrap aceita slug ou regex? adaptado para usar term
+            # scrap_vagascom espera term (string)
             novas = scrap_vagascom(term=term, max_pages=SCRAP_MAX_PAGES)
             if not novas:
                 logging.info(f"[SCRAP] Nenhuma vaga encontrada pelo scrap para '{term}'")
@@ -783,6 +810,92 @@ def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_prof
         seen_urls.add(u)
         unique.append(v)
     return unique
+
+# -----------------------
+# Otimização
+# -----------------------
+def buscar_vagas_otimizado(term: str, limit: int = 50) -> List[dict]:
+    """
+    Busca vagas usando índice text em título e descrição, limitado a 'limit' documentos.
+    Apenas retorna documentos com embedding já calculado.
+    """
+    term_sanitizado = term.strip().lower()
+
+    # Busca usando índice text
+    docs = list(
+        vagas_col.find(
+            {
+                "$text": {"$search": term_sanitizado},
+                "embedding": {"$exists": True}  # filtra apenas vagas com embedding
+            },
+            {"titulo": 1, "descricao": 1, "url": 1, "empresa": 1, "site": 1, "embedding": 1}
+        ).limit(limit)
+    )
+
+    return docs
+
+
+def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K_EMBEDDINGS):
+    """
+    Busca vagas relevantes usando $text + embeddings pré-calculadas.
+    Retorna as top_k vagas mais compatíveis.
+    """
+    # Extrair profissões do currículo (cache-aware)
+    profissoes = extrair_profissao_principal_cached(email, texto)
+    candidate_vagas = []
+
+    for profissao in profissoes:
+        nucleo = reduzir_profissao(profissao)
+        term = sanitizer_vagas_term(nucleo)
+
+        # Busca vagas com embedding já calculado e índice text
+        docs = buscar_vagas_otimizado(term, limit=20)
+        candidate_vagas.extend(docs)
+
+    if not candidate_vagas:
+        # fallback: pegar vagas gerais com embedding
+        candidate_vagas = list(
+            vagas_col.find(
+                {"embedding": {"$exists": True}},
+                {"titulo":1,"descricao":1,"url":1,"empresa":1,"site":1,"embedding":1}
+            ).limit(50)
+        )
+
+    if not candidate_vagas:
+        return []
+
+    # Embedding do currículo
+    embedding_curriculo = embedding_model.encode(texto, convert_to_tensor=True)
+
+    # Calcula similaridade e mantém top_k
+    vagas_com_scores = []
+    for vaga in candidate_vagas:
+        emb_vaga = torch.tensor(vaga["embedding"])
+        score = util.cos_sim(embedding_curriculo, emb_vaga).item()
+        vaga["_score"] = score
+        vagas_com_scores.append(vaga)
+
+    # Ordena pelo score e pega top_k
+    top_vagas = sorted(vagas_com_scores, key=lambda x: x["_score"], reverse=True)[:top_k]
+
+    # Extrai requisitos apenas para top_k final
+    resultados = []
+    for vaga in top_vagas:
+        descricao = f"{vaga.get('titulo','')} {vaga.get('descricao','')}".strip()
+        req_text_list = extrair_requisitos(descricao)
+        resultados.append({
+            "vaga_id": vaga.get("_id"),
+            "titulo": vaga.get("titulo"),
+            "empresa": vaga.get("empresa"),
+            "descricao": descricao,
+            "url": vaga.get("url"),
+            "site": vaga.get("site"),
+            "compatibilidade": round(vaga["_score"], 4),
+            "requisitos": req_text_list,
+            "_raw_doc": vaga
+        })
+
+    return resultados
 
 # -----------------------
 # Helper: extrair profissões com cache no curriculo

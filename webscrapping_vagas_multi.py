@@ -100,7 +100,7 @@ def scrap_vagascom_layout_antigo(soup):
         descricao_tag = item.select_one(".detalhes p")
         descricao_resumida = descricao_tag.text.strip() if descricao_tag else ""
 
-        descricao = scrap_vagas_com_detalhes(link)
+        descricao = descricao_resumida + " " + scrap_vagas_com_detalhes(link)
 
         vagas.append({
             "_uid": make_uid(titulo, empresa, "Vagas.com", link),
@@ -199,144 +199,149 @@ def _clean_text(txt: str) -> str:
     txt = txt.strip()
     return txt
 
-def scrap_vagas_com_detalhes(url, driver):
-    try:
-        driver.get(url)
-        time.sleep(2)
+# def scrap_vagas_com_detalhes(url, driver):
+#     try:
+#         driver.get(url)
+#         time.sleep(2)
 
-        html = driver.page_source
-        soup = BeautifulSoup(html, "html.parser")
+#         html = driver.page_source
+#         soup = BeautifulSoup(html, "html.parser")
 
-        # ===== 1) Remover scripts, anúncios e elementos invisíveis =====
-        for tag in soup(["script", "style", "noscript"]):
-            tag.decompose()
+#         # ===== 1) Remover scripts, anúncios e elementos invisíveis =====
+#         for tag in soup(["script", "style", "noscript"]):
+#             tag.decompose()
 
-        # ===== 2) Possíveis seletores de descrição (NOVO + ANTIGO) =====
-        seletores = [
-            "div.job-description",                # layout novo
-            "div#descricao",                      # layout antigo
-            "div.descricao",                      # outra variante antiga
-            "div.container p",                    # fallback interno
-            "div.text-content",                   # usado em algumas vagas antigas
-        ]
-
-        descricao = None
-
-        for sel in seletores:
-            bloco = soup.select_one(sel)
-            if bloco:
-                descricao = bloco.get_text(separator=" ", strip=True)
-                break
-
-        # ===== 3) Se ainda não achou, tentar dentro do main =====
-        if not descricao:
-            main = soup.find("main")
-            if main:
-                descricao = main.get_text(separator=" ", strip=True)
-
-        # ===== 4) última barreira — remover lixo de anúncios =====
-        blacklist = [
-            "googletag", "pbjs", "adUnits", "PREBID",
-            "refresh()", "gpt", "adserverRequest", "FAILSAFE"
-        ]
-
-        if descricao:
-            for termo in blacklist:
-                if termo in descricao:
-                    descricao = None
-                    break
-
-        # ===== 5) fallback final: não retorna JavaScript =====
-        if not descricao or len(descricao) < 30:
-            descricao = "Descrição não disponível."
-
-        return descricao
-
-    except Exception as e:
-        print("Erro ao extrair descrição:", e)
-        return "Descrição não disponível."
-
-
-# def scrap_vagas_com_detalhes(url: str, timeout: int = 10, retry: int = 2, sleep_between_retries: float = 0.6) -> str:
-#     def clean_text(txt: str) -> str:
-#         if not txt:
-#             return ""
-
-#         # remove javascript, prebid, googletag, tracking, CSS, etc
-#         blacklist = [
-#             r"googletag", r"pbjs", r"function\s*\(", r"var ", r"adserver", r"pubads",
-#             r"GPTAsync", r"setTimeout", r"PREBID", r"FAILSAFE"
+#         # ===== 2) Possíveis seletores de descrição (NOVO + ANTIGO) =====
+#         seletores = [
+#             "div.job-description",                # layout novo
+#             "div#descricao",                      # layout antigo
+#             "div.descricao",                      # outra variante antiga
+#             "div.container p",                    # fallback interno
+#             "div.text-content",                   # usado em algumas vagas antigas
 #         ]
-#         for b in blacklist:
-#             if re.search(b, txt, flags=re.IGNORECASE):
-#                 return ""
 
-#         txt = re.sub(r"\s+", " ", txt).strip()
-#         return txt
+#         descricao = None
 
-#     headers = {
-#         "User-Agent": "Mozilla/5.0"
-#     }
+#         for sel in seletores:
+#             bloco = soup.select_one(sel)
+#             if bloco:
+#                 descricao = bloco.get_text(separator=" ", strip=True)
+#                 break
 
-#     for attempt in range(retry):
-#         try:
-#             resp = requests.get(url, headers=headers, timeout=timeout)
-#             if resp.status_code != 200:
-#                 time.sleep(sleep_between_retries)
-#                 continue
+#         # ===== 3) Se ainda não achou, tentar dentro do main =====
+#         if not descricao:
+#             main = soup.find("main")
+#             if main:
+#                 descricao = main.get_text(separator=" ", strip=True)
 
-#             soup = BeautifulSoup(resp.text, "html.parser")
+#         # ===== 4) última barreira — remover lixo de anúncios =====
+#         blacklist = [
+#             "googletag", "pbjs", "adUnits", "PREBID",
+#             "refresh()", "gpt", "adserverRequest", "FAILSAFE"
+#         ]
 
-#             # --- REMOVER TUDO QUE NÃO QUEREMOS ---
-#             for tag in soup(["script", "style", "noscript"]):
-#                 tag.decompose()
-#             for advert in soup.select(".publicidade, .ad, .ads, .banner"):
-#                 advert.decompose()
+#         if descricao:
+#             for termo in blacklist:
+#                 if termo in descricao:
+#                     descricao = None
+#                     break
 
-#             # --- SELETORES DO LAYOUT ANTIGO DA VAGAS.COM ---
-#             selectors_prioritarios = [
-#                 "div.detalhes > p",             # layout antigo clássico
-#                 "div#detalhes > p",
-#                 "div.boxVaga > p",
-#                 "section#detalhes-vaga p",
-#                 "div.informacoes > p",
-#             ]
+#         # ===== 5) fallback final: não retorna JavaScript =====
+#         if not descricao or len(descricao) < 30:
+#             descricao = "Descrição não disponível."
 
-#             textos = []
+#         return descricao
 
-#             # 1) tenta seletores antigos
-#             for sel in selectors_prioritarios:
-#                 nodes = soup.select(sel)
-#                 for p in nodes:
-#                     t = clean_text(p.get_text(" ", strip=True))
-#                     if t and len(t) > 20:
-#                         textos.append(t)
+#     except Exception as e:
+#         print("Erro ao extrair descrição:", e)
+#         return "Descrição não disponível."
 
-#             if textos:
-#                 return "\n".join(textos)
+def scrap_vagas_com_detalhes(url: str, timeout: int = 10, retry: int = 2, sleep_between_retries: float = 0.6) -> str:
+    """
+    Extrai a descrição da vaga do HTML, suportando layouts antigos e novos da Vagas.com.
+    """
 
-#             # 2) fallback: pegar <p> significativos, ignorando lixo
-#             all_p = soup.find_all("p")
-#             textos_fallback = []
-#             for p in all_p:
-#                 t = clean_text(p.get_text(" ", strip=True))
-#                 # rejeitar textos muito curtos ou suspeitos
-#                 if t and len(t) > 30:
-#                     textos_fallback.append(t)
+    def clean_text(txt: str) -> str:
+        if not txt:
+            return ""
+        # remove javascript, tracking, anúncios, CSS, etc
+        blacklist = [
+            r"googletag", r"pbjs", r"function\s*\(", r"var ", r"adserver", r"pubads",
+            r"GPTAsync", r"setTimeout", r"PREBID", r"FAILSAFE"
+        ]
+        for b in blacklist:
+            if re.search(b, txt, flags=re.IGNORECASE):
+                return ""
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
 
-#             if textos_fallback:
-#                 # retorna só os maiores textos (descrição real)
-#                 textos_fallback = sorted(textos_fallback, key=len, reverse=True)
-#                 return "\n".join(textos_fallback[:3])
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
 
-#             return ""
+    for attempt in range(retry):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code != 200:
+                time.sleep(sleep_between_retries)
+                continue
 
-#         except Exception:
-#             time.sleep(sleep_between_retries)
-#             continue
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-#     return ""
+            # --- remover scripts, estilos, anúncios ---
+            for tag in soup(["script", "style", "noscript"]):
+                tag.decompose()
+            for advert in soup.select(".publicidade, .ad, .ads, .banner"):
+                advert.decompose()
 
+            textos = []
+
+            # --- 1) Layout antigo Vagas.com ---
+            selectors_antigos = [
+                "div.detalhes > p",
+                "div#detalhes > p",
+                "div.boxVaga > p",
+                "section#detalhes-vaga p",
+                "div.informacoes > p",
+            ]
+            for sel in selectors_antigos:
+                nodes = soup.select(sel)
+                for p in nodes:
+                    t = clean_text(p.get_text(" ", strip=True))
+                    if t and len(t) > 20:
+                        textos.append(t)
+
+            # --- 2) Layout novo: job-tab-content ---
+            if not textos:
+                nodes = soup.select("div.job-tab-content.job-description__text p, div.job-tab-content.job-description__text")
+                for p in nodes:
+                    t = clean_text(p.get_text(" ", strip=True))
+                    if t and len(t) > 20:
+                        textos.append(t)
+
+            # --- 3) fallback: pegar os <p> mais longos da página ---
+            if not textos:
+                all_p = soup.find_all("p")
+                fallback = []
+                for p in all_p:
+                    t = clean_text(p.get_text(" ", strip=True))
+                    if t and len(t) > 30:
+                        fallback.append(t)
+                if fallback:
+                    fallback = sorted(fallback, key=len, reverse=True)
+                    textos.extend(fallback[:3])
+
+            # --- 4) retorna resultado ou mensagem padrão ---
+            if textos:
+                return "\n".join(textos)
+            else:
+                return "Descrição não disponível."
+
+        except Exception:
+            time.sleep(sleep_between_retries)
+            continue
+
+    return ""
 
 if __name__ == "__main__":
     scrap_todos()
