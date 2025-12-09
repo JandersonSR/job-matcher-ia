@@ -946,7 +946,22 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
     # Calcula similaridade e mantém top_k
     vagas_com_scores = []
 
+    unique_ids = set()
+    unique_candidate_vagas = []
+
     for vaga in candidate_vagas:
+        uid = f"{vaga.get('titulo','')}-{vaga.get('empresa','')}-{vaga.get('site','')}".lower()
+
+        if not uid:
+            continue   # vaga inválida
+
+        if uid in unique_ids:
+            continue   # duplicada -> ignora
+
+        unique_ids.add(uid)
+        unique_candidate_vagas.append(vaga)
+
+    for vaga in unique_candidate_vagas:
         if not vaga.get("embedding"):
             continue
         emb_vaga = torch.tensor(vaga["embedding"])
