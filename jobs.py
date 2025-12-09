@@ -884,26 +884,36 @@ def buscar_vagas_otimizado(term: str, limit: int = 50) -> List[dict]:
 
     # Busca usando índice text
     docs = list(
-        vagas_col.find(
-            {
+        vagas_col.aggregate([
+            {"$match": {
                 "$text": {"$search": term_sanitizado},
-                "embedding": {"$exists": True}  # filtra apenas vagas com embedding
-            },
-            {"titulo": 1, "descricao": 1, "url": 1, "empresa": 1, "site": 1, "embedding": 1}
-        ).limit(limit)
+                "embedding": {"$exists": True}
+            }},
+            {"$group": {
+                "_id": "$_uid",      # agrupa por UID
+                "doc": {"$first": "$$ROOT"}
+            }},
+            {"$replaceRoot": {"newRoot": "$doc"}},
+            {"$limit": limit}
+        ])
     )
 
     if not docs:
         docs = list(
-            vagas_col.find(
-                {
+            vagas_col.aggregate([
+                {"$match": {
                     "$or": [
                         {"titulo": {"$regex": term_sanitizado, "$options": "i"}},
-                        {"descricao": {"$regex": term_sanitizado, "$options": "i"}}
+                        {"descricao": {"$regex": term_sanitizado, "$options": "i"}},
                     ]
-                },
-                {"titulo": 1, "descricao": 1, "url": 1, "empresa": 1, "site": 1, "embedding": 1}
-            ).limit(limit)
+                }},
+                {"$group": {
+                    "_id": "$_uid",
+                    "doc": {"$first": "$$ROOT"}
+                }},
+                {"$replaceRoot": {"newRoot": "$doc"}},
+                {"$limit": limit}
+            ])
         )
 
     return docs
