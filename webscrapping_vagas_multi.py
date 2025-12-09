@@ -6,6 +6,8 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import pymongo
 import re
+import unicodedata
+from typing import List, Dict
 
 load_dotenv()
 
@@ -31,6 +33,7 @@ DB_NAME = os.getenv("DB_NAME", "jobmatcher")
 client = pymongo.MongoClient(MONGO_URL)
 db = client[DB_NAME]
 vagas_col = db["vagas"]
+profissoes_regex_col = db["profissoes_regex"]
 
 HEADERS = {
     "User-Agent": os.getenv("USER_AGENT",
@@ -51,33 +54,6 @@ def _safe_get_text(tag):
 # --------------------------------------------------
 # SCRAPING DO LAYOUT NOVO (cards <article.job-card>)
 # --------------------------------------------------
-def scrap_vagascom_novo_layout(soup):
-    cards = soup.select("article.job-card")
-    vagas = []
-
-    for card in cards:
-        link_tag = card.find("a", class_="job-card__title-link")
-        if not link_tag:
-            continue
-
-        link = "https://www.vagas.com.br" + link_tag.get("href")
-        titulo = link_tag.text.strip()
-
-        empresa_tag = card.find("span", class_="job-card__company")
-        empresa = empresa_tag.text.strip() if empresa_tag else ""
-
-        descricao = scrap_vagas_com_detalhes(link)
-
-        vagas.append({
-            "_uid": make_uid(titulo, empresa, "Vagas.com", link),
-            "titulo": titulo,
-            "empresa": empresa,
-            "descricao": descricao,
-            "url": link,
-            "site": "Vagas.com"
-        })
-    return vagas
-
 
 # --------------------------------------------------
 # SCRAPING DO LAYOUT ANTIGO (<li class="vaga">)
@@ -150,7 +126,7 @@ def scrap_vagascom(term="desenvolvedor", max_pages=1):
         # ------------------------------
         # TENTAR LAYOUT NOVO
         # ------------------------------
-        vagas = [] # scrap_vagascom_novo_layout(soup)
+        vagas = []
         # print(f"[VAGAS.COM] Novo layout retornou: {len(vagas)} vagas")
 
         if len(vagas) == 0:
@@ -163,6 +139,8 @@ def scrap_vagascom(term="desenvolvedor", max_pages=1):
 
         # Armazena no DB e adiciona à lista final
         for vaga in vagas:
+            vaga = upsert_vaga_with_search_terms(vaga)
+
             vagas_col.update_one({"_uid": vaga["_uid"]}, {"$set": vaga}, upsert=True)
             vagas_final.append(vaga)
 
@@ -171,6 +149,118 @@ def scrap_vagascom(term="desenvolvedor", max_pages=1):
     print(f"[VAGAS.COM] Total coletado: {len(vagas_final)}")
 
     return vagas_final
+
+# -------------------------
+# Normalização / utilitários
+# -------------------------
+STOP_WORDS = {
+    "de","da","do","dos","das","e","ou","a","o","que","para","por","com","sem",
+    "um","uma","como","em","no","na","nos","nas","sua","seu","se","os","as",
+    "profissional","vaga","vagas"
+}
+
+def _normalize_token(tok: str) -> str:
+    """
+    Normaliza um token: tira acentos, lower, mantém letras/números/-
+    Retorna token vazio se inválido.
+    """
+    if not tok:
+        return ""
+    tok = tok.lower().strip()
+    tok = unicodedata.normalize("NFD", tok)
+    tok = tok.encode("ascii", "ignore").decode("utf-8")  # remove acentos
+    tok = re.sub(r"[^a-z0-9\-]", " ", tok)
+    tok = re.sub(r"\s+", " ", tok).strip()
+    if not tok or len(tok) < 3:
+        return ""
+    if tok in STOP_WORDS:
+        return ""
+    return tok
+
+# -------------------------
+# Gerar search_terms compactos
+# -------------------------
+def gerar_search_terms(doc: Dict, max_terms: int = 12) -> List[str]:
+    """
+    Gera um conjunto pequeno e relevante de termos para busca (search_terms).
+    Prioriza palavras do título e bigramas do título, depois pega palavras relevantes da descrição.
+    Limita ao 'max_terms' para evitar arrays gigantes.
+    """
+    titulo = (doc.get("titulo") or "").strip()
+    descricao = (doc.get("descricao") or "").strip()
+
+    tokens = []
+    # 1) tokens do título (maior prioridade)
+    for part in re.split(r"[\/\-\|,]", titulo):
+        for w in re.split(r"\s+", part):
+            t = _normalize_token(w)
+            if t:
+                tokens.append(t)
+
+    # 2) bigramas do título (ex: "chefe cozinha" -> "chefe-cozinha")
+    titulo_words = [w for w in (_normalize_token(w) for w in re.split(r"\s+", titulo)) if w]
+    for i in range(len(titulo_words) - 1):
+        big = f"{titulo_words[i]}-{titulo_words[i+1]}"
+        if len(big) <= 30:
+            tokens.append(big)
+
+    # 3) pegar palavras significativas do início da descrição (até N palavras)
+    if not tokens or len(tokens) < (max_terms // 2):
+        # extrair primeiros parágrafos ou primeiras 200 chars
+        head = descricao.split("\n")[0][:400]
+        for w in re.split(r"[^\w\-]+", head):
+            t = _normalize_token(w)
+            if t:
+                tokens.append(t)
+
+    # 4) dedupe preservando ordem e limitar
+    seen = set()
+    out = []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+        if len(out) >= max_terms:
+            break
+
+    return out
+
+# -------------------------
+# Upsert otimizado de vaga (usar no scraper)
+# -------------------------
+def upsert_vaga_with_search_terms(vaga: Dict, max_terms: int = 12) -> Dict:
+    """
+    Gera 'search_terms' e salva a vaga no Mongo (update_one upsert).
+    - vaga: dict contendo pelo menos '_uid','titulo','descricao','url'
+    """
+    # gera termos compactos
+    termos = gerar_search_terms(vaga, max_terms=max_terms)
+    vaga["search_terms"] = termos
+
+    # tentar mapear profissões existentes (se coleção fornecida)
+    if profissoes_regex_col is not None and termos:
+        # procurar profissões que batem com qualquer termo (campo 'term' deve conter termos normalizados)
+        encontrados = list(profissoes_regex_col.find({"term": {"$in": termos}}, {"term": 1}))
+        profs = [e["term"] for e in encontrados]
+        if profs:
+            vaga["profissoes_detectadas"] = profs
+
+    # salvar (upsert por _uid)
+    vagas_col.update_one({"_uid": vaga["_uid"]}, {"$set": vaga}, upsert=True)
+    return vaga
+
+# -------------------------
+# Busca rápida usando search_terms
+# -------------------------
+def buscar_vagas_por_term_simples(term: str, limit: int = 50) -> List[Dict]:
+    """
+    Busca rápida e indexável: normaliza o termo e pesquisa equality em search_terms.
+    """
+    t = _normalize_token(term)
+    if not t:
+        return []
+    docs = list(vagas_col.find({"search_terms": t}, {"titulo":1,"descricao":1,"url":1,"empresa":1,"site":1,"embedding":1}).limit(limit))
+    return docs
 
 # ------------------------------
 # EXECUTAR TODOS
@@ -198,63 +288,6 @@ def _clean_text(txt: str) -> str:
     txt = re.sub(r'[ \t]{2,}', ' ', txt)
     txt = txt.strip()
     return txt
-
-# def scrap_vagas_com_detalhes(url, driver):
-#     try:
-#         driver.get(url)
-#         time.sleep(2)
-
-#         html = driver.page_source
-#         soup = BeautifulSoup(html, "html.parser")
-
-#         # ===== 1) Remover scripts, anúncios e elementos invisíveis =====
-#         for tag in soup(["script", "style", "noscript"]):
-#             tag.decompose()
-
-#         # ===== 2) Possíveis seletores de descrição (NOVO + ANTIGO) =====
-#         seletores = [
-#             "div.job-description",                # layout novo
-#             "div#descricao",                      # layout antigo
-#             "div.descricao",                      # outra variante antiga
-#             "div.container p",                    # fallback interno
-#             "div.text-content",                   # usado em algumas vagas antigas
-#         ]
-
-#         descricao = None
-
-#         for sel in seletores:
-#             bloco = soup.select_one(sel)
-#             if bloco:
-#                 descricao = bloco.get_text(separator=" ", strip=True)
-#                 break
-
-#         # ===== 3) Se ainda não achou, tentar dentro do main =====
-#         if not descricao:
-#             main = soup.find("main")
-#             if main:
-#                 descricao = main.get_text(separator=" ", strip=True)
-
-#         # ===== 4) última barreira — remover lixo de anúncios =====
-#         blacklist = [
-#             "googletag", "pbjs", "adUnits", "PREBID",
-#             "refresh()", "gpt", "adserverRequest", "FAILSAFE"
-#         ]
-
-#         if descricao:
-#             for termo in blacklist:
-#                 if termo in descricao:
-#                     descricao = None
-#                     break
-
-#         # ===== 5) fallback final: não retorna JavaScript =====
-#         if not descricao or len(descricao) < 30:
-#             descricao = "Descrição não disponível."
-
-#         return descricao
-
-#     except Exception as e:
-#         print("Erro ao extrair descrição:", e)
-#         return "Descrição não disponível."
 
 def scrap_vagas_com_detalhes(url: str, timeout: int = 10, retry: int = 2, sleep_between_retries: float = 0.6) -> str:
     """

@@ -36,7 +36,7 @@ def processar_curriculos():
         result = worker_run_once()
         return {"status": "ok", "detalhe": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos.: {e}")
 
 @app.get("/comparar/misto")
 def comparar_misto(email: str):
@@ -46,6 +46,7 @@ def comparar_misto(email: str):
     """
     try:
         from jobs import worker_comparar_misto
+        print("Iniciando comparação mista para:", email)
         result = worker_comparar_misto(email)
         return {"status": "ok", "detalhe": result}
     except Exception as e:
@@ -62,7 +63,7 @@ def comparar_llm(email: str):
         result = worker_comparar_llm(email)
         return {"status": "ok", "detalhe": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos!: {e}")
 
 @app.get("/comparar/embeddings")
 def comparar_embeddings(email: str = ""):
@@ -75,7 +76,7 @@ def comparar_embeddings(email: str = ""):
         result = worker_comparar_embeddings(email)
         return {"status": "ok", "detalhe": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos:: {e}")
 
 @app.get("/api/restart_llm")
 def star_server():

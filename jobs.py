@@ -228,7 +228,7 @@ def gerar_melhorias(requisitos_nao_atendidos: List[str]) -> List[str]:
 # LLM helper
 # -----------------------
 
-def _call_llm(prompt, timeout=30, retries=1):
+def _call_llm(prompt, timeout=30, retries=1, max_tokens=2500):
     """
     GPT-4o-mini via OpenAI API
     """
@@ -253,7 +253,7 @@ def _call_llm(prompt, timeout=30, retries=1):
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
-                "max_tokens": 400,
+                "max_tokens": max_tokens,
                 "temperature": 0.2
             }
 
@@ -368,7 +368,7 @@ Currículo:
 
 Retorne no minimo 3 e no maximo {max_profissoes} profissões, separadas por vírgula:
 """
-    resp = _call_llm(prompt)
+    resp = _call_llm(prompt, timeout=20, retries=0, max_tokens=400)
 
     # Normaliza resposta: remove espaços extras e separa por vírgula
     profissoes = [p.strip().lower() for p in resp.split(",") if p.strip()]
@@ -376,103 +376,157 @@ Retorne no minimo 3 e no maximo {max_profissoes} profissões, separadas por vír
     # Garante máximo de max_profissoes
     return profissoes[:max_profissoes]
 
+# from bson import ObjectId
+
+def serializar(v):
+    if isinstance(v, list):
+        return [serializar(i) for i in v]
+    if isinstance(v, dict):
+        return {k: serializar(v2) for k, v2 in v.items()}
+    return v
+
+def reparar_json(raw):
+    """
+    Tenta reparar JSON incompleto ou mal formatado retornado pelo LLM.
+    """
+    import re
+
+    # Remove possíveis markdowns como ```json e ```
+    raw = re.sub(r"```.*?```", "", raw, flags=re.DOTALL).strip()
+
+    # Força fechamento de aspas abertas
+    raw = raw.replace("\n", "")
+
+    # Tenta heurística simples: garantir que termina com ] ou }
+    if not raw.endswith("]") and "]" in raw:
+        raw = raw[:raw.rfind("]")+1]
+
+    return raw
+
+
 # -----------------------
 # PROCESSAR COM LLM (apenas top-N vagas)
 # - recebe apenas as melhores vagas de embeddings
 # -----------------------
 
-def processar_com_llm(texto, vagas):
+def processar_com_llm(texto, vagas, max_vagas_llm=5):
     """
-    Avaliação usando LLM para cada vaga já filtrada.
+    Avalia várias vagas em UMA única chamada ao LLM.
+    O retorno é uma lista de análises, uma por vaga.
     """
-    resultados = []
 
-    for vaga in vagas:
-        descricao = vaga.get("descricao") or vaga.get("titulo", "")
+    if not vagas:
+        return []
 
-        prompt = f"""
+    vagas = vagas[:max_vagas_llm]
+    # garantir campos essenciais
+    vagas_prepared = []
+    for v in vagas:
+        vagas_prepared.append({
+            "vaga_id": str(v.get("_id") or v.get("vaga_id") or v.get("_uid")),
+            "titulo": v.get("titulo", ""),
+            "empresa": v.get("empresa", ""),
+            "descricao": v.get("descricao") or v.get("titulo", ""),
+            "url": v.get("url"),
+            "site": v.get("site")
+        })
+
+    prompt = f"""
 Você é um especialista em Recrutamento e Seleção.
 
-Analise cuidadosamente a VAGA e extraia uma lista de REQUISITOS a partir dela
-(somente itens realmente mencionados no texto).
+Analise o CURRÍCULO abaixo contra as seguintes {len(vagas_prepared)} vagas.
 
-Depois, compare cada requisito com o CURRÍCULO.
+Para **cada vaga**, siga as regras:
 
-REGRAS IMPORTANTES:
-- Use apenas o texto da vaga e do currículo.
-- NÃO invente requisitos. Use apenas o que está escrito na vaga.
-- NÃO invente habilidades do currículo.
-- Não inclua comentários fora do JSON.
-- Sempre calcule compatibilidade entre o currículo e a vaga retornando um número entre 0 e 1, como: 0.8. Nunca enviar 0 nem 1 como compatibilidade.
+1. Extraia uma lista REAL de requisitos da vaga (somente o que está escrito).
+2. Compare cada requisito com o CURRÍCULO.
+3. Calcule "compatibilidade" entre 0 e 1 (0 e 1 absolutos nunca devem ser usados; sempre valores como 0.77, 0.53 etc.).
+4. NÃO invente requisitos.
+5. NÃO invente habilidades do currículo.
+6. Retorne **apenas JSON**, sem textos fora do JSON.
+7. O retorno deve ser uma lista JSON, com 1 item por vaga.
 
 CURRÍCULO:
 {texto}
 
-VAGA:
-{descricao}
+VAGAS (lista JSON com ID único):
+{json.dumps(serializar(vagas_prepared), ensure_ascii=False)}
 
+RESPOSTA ESPERADA (somente JSON):
+[
+  {{
+    "vaga_id": "id_da_vaga_1",
+    "compatibilidade": 0.73,
+    "requisitos_atendidos": [...],
+    "requisitos_nao_atendidos": [...],
+    "melhorias_sugeridas": [...]
+  }},
+  ...
+]
 
-Retorne APENAS um JSON válido SEM texto fora do JSON. Exemplo de saída:
-{{"compatibilidade": 0.73, "requisitos_atendidos":["Python"], "requisitos_nao_atendidos":["Docker"], "melhorias_sugeridas":["Curso Docker básico", "incluir palavras chaves como Docker, Python no currículo"]}}
+NÃO QUEBRE O JSON.
+NÃO INTERROMPA O TEXTO NO MEIO.
+A saída DEVE ser um JSON completo válido.
+Se necessário, RESUMA os requisitos para caber no limite, mas sempre entregue JSON fechado.
+
 """
 
-        # fallback seguro para ID da vaga
-        vaga_id = vaga.get("_id") or vaga.get("vaga_id") or vaga.get("_uid") or None
+    try:
+        # chamada ao LLM
+        resp_text = _extract_text_from_hf_response(_call_llm(prompt))
+
+        # tentar extrair lista JSON completa
+        start = resp_text.find("[")
+        end = resp_text.rfind("]")
+        if start != -1 and end != -1:
+            json_payload = resp_text[start:end+1]
+        else:
+            raise ValueError("Resposta do LLM não contém lista JSON válida.")
+
+        reparado = json_payload
+        # tenta fazer parse
+        try:
+            lista = json.loads(json_payload)
+        except:
+            reparado = reparar_json(json_payload)
 
         try:
-            resp_json = _call_llm(prompt)
-            raw = _extract_text_from_hf_response(resp_json)
+            lista = json.loads(reparado)
+        except Exception:
+            print("[LLM] ERRO FATAL NO JSON:", reparado)
+            raise ValueError("JSON inválido mesmo após reparo.")
 
-            # tenta extrair trecho JSON
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start != -1 and end != -1:
-                json_text = raw[start:end+1]
-            else:
-                json_text = raw
+        resultados = []
 
-            try:
-                parsed = json.loads(json_text)
-            except:
-                parsed = {
-                    "compatibilidade": 0.0,
-                    "requisitos_atendidos": [],
-                    "requisitos_nao_atendidos": [],
-                    "melhorias_sugeridas": []
-                }
+        # combinar dados originais
+        vaga_map = {v["vaga_id"]: v for v in vagas_prepared}
+
+        for item in lista:
+            vid = item.get("vaga_id")
+            origem = vaga_map.get(vid, {})
 
             resultados.append({
-                "json_text": json_text,
-                "parsed": parsed,
-                "vaga_id": vaga_id,
-                "titulo": vaga.get("titulo"),
-                "empresa": vaga.get("empresa"),
-                "url": vaga.get("url"),
-                "site": vaga.get("site"),
-                "compatibilidade": round(float(parsed.get("compatibilidade", 0)), 2),
-                "requisitos_atendidos": parsed.get("requisitos_atendidos", []),
-                "requisitos_nao_atendidos": parsed.get("requisitos_nao_atendidos", []),
-                "melhorias_sugeridas": parsed.get("melhorias_sugeridas", [])
+                "vaga_id": vid,
+                "titulo": origem.get("titulo", ""),
+                "empresa": origem.get("empresa", ""),
+                "url": origem.get("url"),
+                "site": origem.get("site"),
+                "compatibilidade": round(float(item.get("compatibilidade", 0)), 2),
+                "requisitos_atendidos": item.get("requisitos_atendidos", []),
+                "requisitos_nao_atendidos": item.get("requisitos_nao_atendidos", []),
+                "melhorias_sugeridas": item.get("melhorias_sugeridas", []),
+                "parsed": item,
+                "json_text": json.dumps(item, ensure_ascii=False)
             })
 
-        except Exception as e:
-            print(f"[LLM] erro ao processar vaga {vaga.get('titulo')}: {e}")
+        # ordenar pela compatibilidade
+        resultados = sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)
 
-            resultados.append({
-                "vaga_id": vaga_id,
-                "titulo": vaga.get("titulo"),
-                "empresa": vaga.get("empresa"),
-                "compatibilidade": 0.0,
-                "requisitos_atendidos": [],
-                "requisitos_nao_atendidos": [],
-                "melhorias_sugeridas": []
-            })
+        return resultados[:5]
 
-    # ordena por compatibilidade
-    resultados = sorted(resultados, key=lambda x: x["compatibilidade"], reverse=True)
-
-    return resultados[:5]
-
+    except Exception as e:
+        print(f"[LLM] ERRO GERAL: {e}")
+        return []
 
 def buscar_vagas_rapido(term: str, limit: int = 50):
     """
@@ -681,6 +735,7 @@ def worker_comparar_misto(email: str):
         return {"mensagem": "nenhum currículo pendente"}
 
     texto = curriculo.get("conteudo") or curriculo.get("texto", "")
+
     if not texto:
         curriculos_col.update_one(
             {"_id": curriculo["_id"]},
@@ -688,10 +743,11 @@ def worker_comparar_misto(email: str):
         )
         return {"erro": "currículo sem texto"}
 
-    vagas = garantir_vagas_para_profissao(email, texto)
-
     # usa pipeline misto como padrão
-    top_vagas = processar_com_embeddings(texto, vagas, top_k=5)
+    top_vagas = comparar_por_embeddings_otimizado(email, texto, top_k=3) or comparar_por_embeddings(email, texto)
+
+
+
     logging.info(f"[LLM] Processando com LLM - Misto para {len(top_vagas)} vagas")
     resultado = processar_com_llm(texto, top_vagas)
 
@@ -715,89 +771,96 @@ def worker_comparar_misto(email: str):
 def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_profissao: int = 5) -> List[dict]:
     profissoes = extrair_profissao_principal_cached(email, texto_curriculo)
     todas_vagas = []
+
     for profissao in profissoes:
         nucleo = reduzir_profissao(profissao)
         term = sanitizer_vagas_term(nucleo)
-        cache_regex = re.compile(re.escape(term), re.IGNORECASE)
-        # busca no cache de scrapping primeiro (usando term normalizado)
-        logging.info(f"[CACHE] Buscando vagas cacheadas para '{cache_regex}'")
-        cache = scrap_cache_col.find_one({"term": cache_regex})
-        if cache and cache.get("vagas"):
-            logging.info(f"[CACHE] Usando vagas cacheadas para '{term}' ({len(cache['vagas'])})")
-            # cache armazena os docs completos (ou pelo menos titulo/descricao/url)
-            vagas_docs = cache["vagas"]
-            # garantir que vagas retornadas sejam objetos como do DB (não têm _id) ->
-            # para consistência, tentamos casar pelo url no DB e inserir se necessário
-            normalized = []
-            for v in vagas_docs:
-                # tenta achar no DB por url
-                if v.get("url"):
-                    found = vagas_col.find_one({"url": v["url"]})
-                    if found:
-                        normalized.append(found)
+
+        # Busca vagas com embedding já calculado e índice text
+        docs = buscar_vagas_otimizado(term, limit=20)
+        todas_vagas.extend(docs)
+
+        if not todas_vagas:
+            cache_regex = re.compile(re.escape(term), re.IGNORECASE)
+            # busca no cache de scrapping primeiro (usando term normalizado)
+            logging.info(f"[CACHE] Buscando vagas cacheadas para '{cache_regex}'")
+            cache = scrap_cache_col.find_one({"term": cache_regex})
+            if cache and cache.get("vagas"):
+                logging.info(f"[CACHE] Usando vagas cacheadas para '{term}' ({len(cache['vagas'])})")
+                # cache armazena os docs completos (ou pelo menos titulo/descricao/url)
+                vagas_docs = cache["vagas"]
+                # garantir que vagas retornadas sejam objetos como do DB (não têm _id) ->
+                # para consistência, tentamos casar pelo url no DB e inserir se necessário
+                normalized = []
+                for v in vagas_docs:
+                    # tenta achar no DB por url
+                    if v.get("url"):
+                        found = vagas_col.find_one({"url": v["url"]})
+                        if found:
+                            normalized.append(found)
+                        else:
+                            # inserir nova vaga com embedding e retornar
+                            new_doc = dict(v)
+                            new_doc["_id"] = vagas_col.insert_one(new_doc).inserted_id
+                            emb_vec = embedding_model.encode((new_doc.get("titulo","") + " " + new_doc.get("descricao","")).strip(), convert_to_tensor=False)
+                            vagas_col.update_one({"_id": new_doc["_id"]}, {"$set": {"embedding": emb_vec.tolist()}})
+                            new_doc["embedding"] = emb_vec.tolist()
+                            normalized.append(new_doc)
                     else:
-                        # inserir nova vaga com embedding e retornar
+                        # sem url, só insere
                         new_doc = dict(v)
                         new_doc["_id"] = vagas_col.insert_one(new_doc).inserted_id
                         emb_vec = embedding_model.encode((new_doc.get("titulo","") + " " + new_doc.get("descricao","")).strip(), convert_to_tensor=False)
                         vagas_col.update_one({"_id": new_doc["_id"]}, {"$set": {"embedding": emb_vec.tolist()}})
                         new_doc["embedding"] = emb_vec.tolist()
                         normalized.append(new_doc)
-                else:
-                    # sem url, só insere
-                    new_doc = dict(v)
-                    new_doc["_id"] = vagas_col.insert_one(new_doc).inserted_id
-                    emb_vec = embedding_model.encode((new_doc.get("titulo","") + " " + new_doc.get("descricao","")).strip(), convert_to_tensor=False)
-                    vagas_col.update_one({"_id": new_doc["_id"]}, {"$set": {"embedding": emb_vec.tolist()}})
-                    new_doc["embedding"] = emb_vec.tolist()
-                    normalized.append(new_doc)
-            vagas_existentes = normalized
-        else:
-            # busca no DB com projeção para evitar transferir campos pesados
-            logging.info(f"[DB] ELSE Buscando vagas no DB para '{term}'")
-            vagas_existentes = buscar_vagas_otimizado(term, limit=50)  # limitar scans
+                vagas_existentes = normalized
+            else:
+                # busca no DB com projeção para evitar transferir campos pesados
+                logging.info(f"[DB] ELSE Buscando vagas no DB para '{term}'")
+                vagas_existentes = buscar_vagas_otimizado(term, limit=50)  # limitar scans
 
-        if len(vagas_existentes) >= min_por_profissao:
-            logging.info(f"[OK] Encontradas {len(vagas_existentes)} vagas para '{term}' no DB")
-            todas_vagas.extend(vagas_existentes)
-            continue
-
-        # se não tem vagas suficientes -> verificar scrap_cache para o termo (se não houve, scrap)
-        if cache is None:
-            logging.info(f"[SCRAP] Necessário scrap para termo '{term}'")
-            # scrap_vagascom espera term (string)
-            novas = scrap_vagascom(term=term, max_pages=SCRAP_MAX_PAGES)
-            if not novas:
-                logging.info(f"[SCRAP] Nenhuma vaga encontrada pelo scrap para '{term}'")
+            if len(vagas_existentes) >= min_por_profissao:
+                logging.info(f"[OK] Encontradas {len(vagas_existentes)} vagas para '{term}' no DB")
+                todas_vagas.extend(vagas_existentes)
                 continue
 
-            # salvar resultado no cache para próxima vez
-            try:
-                scrap_cache_col.insert_one({"term": term, "vagas": novas, "ts": time.time()})
-            except pymongo.errors.DuplicateKeyError:
-                scrap_cache_col.update_one({"term": term}, {"$set": {"vagas": novas, "ts": time.time()}})
-
-            # inserir as novas vagas no DB (evitar duplicatas - por url)
-            inserted_docs = []
-            for v in novas:
-                url = v.get("url")
-                # tenta evitar duplicata por url
-                if url and vagas_col.find_one({"url": url}):
-                    doc = vagas_col.find_one({"url": url})
-                    inserted_docs.append(doc)
+            # se não tem vagas suficientes -> verificar scrap_cache para o termo (se não houve, scrap)
+            if cache is None:
+                logging.info(f"[SCRAP] Necessário scrap para termo '{term}'")
+                # scrap_vagascom espera term (string)
+                novas = scrap_vagascom(term=term, max_pages=SCRAP_MAX_PAGES)
+                if not novas:
+                    logging.info(f"[SCRAP] Nenhuma vaga encontrada pelo scrap para '{term}'")
                     continue
-                # insere e calcula embedding
-                doc = dict(v)
-                doc["_id"] = vagas_col.insert_one(doc).inserted_id
-                emb_vec = embedding_model.encode((doc.get("titulo","") + " " + doc.get("descricao","")).strip(), convert_to_tensor=False)
-                vagas_col.update_one({"_id": doc["_id"]}, {"$set": {"embedding": emb_vec.tolist()}})
-                doc["embedding"] = emb_vec.tolist()
-                inserted_docs.append(doc)
-            vagas_existentes = inserted_docs
 
-        # se ainda tiver alguma vaga, adiciona
-        if vagas_existentes:
-            todas_vagas.extend(vagas_existentes)
+                # salvar resultado no cache para próxima vez
+                try:
+                    scrap_cache_col.insert_one({"term": term, "vagas": novas, "ts": time.time()})
+                except pymongo.errors.DuplicateKeyError:
+                    scrap_cache_col.update_one({"term": term}, {"$set": {"vagas": novas, "ts": time.time()}})
+
+                # inserir as novas vagas no DB (evitar duplicatas - por url)
+                inserted_docs = []
+                for v in novas:
+                    url = v.get("url")
+                    # tenta evitar duplicata por url
+                    if url and vagas_col.find_one({"url": url}):
+                        doc = vagas_col.find_one({"url": url})
+                        inserted_docs.append(doc)
+                        continue
+                    # insere e calcula embedding
+                    doc = dict(v)
+                    doc["_id"] = vagas_col.insert_one(doc).inserted_id
+                    emb_vec = embedding_model.encode((doc.get("titulo","") + " " + doc.get("descricao","")).strip(), convert_to_tensor=False)
+                    vagas_col.update_one({"_id": doc["_id"]}, {"$set": {"embedding": emb_vec.tolist()}})
+                    doc["embedding"] = emb_vec.tolist()
+                    inserted_docs.append(doc)
+                vagas_existentes = inserted_docs
+
+            # se ainda tiver alguma vaga, adiciona
+            if vagas_existentes:
+                todas_vagas.extend(vagas_existentes)
 
     # devolver lista (pode conter duplicatas entre profissões — opcionalmente deduplicar por url)
     # deduplicar por url
@@ -840,12 +903,14 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
     Busca vagas relevantes usando $text + embeddings pré-calculadas.
     Retorna as top_k vagas mais compatíveis.
     """
+
     # Extrair profissões do currículo (cache-aware)
     profissoes = extrair_profissao_principal_cached(email, texto)
     candidate_vagas = []
 
     for profissao in profissoes:
         nucleo = reduzir_profissao(profissao)
+
         term = sanitizer_vagas_term(nucleo)
 
         # Busca vagas com embedding já calculado e índice text
@@ -869,6 +934,7 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
 
     # Calcula similaridade e mantém top_k
     vagas_com_scores = []
+
     for vaga in candidate_vagas:
         emb_vaga = torch.tensor(vaga["embedding"])
         score = util.cos_sim(embedding_curriculo, emb_vaga).item()
@@ -895,6 +961,7 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
             "_raw_doc": vaga
         })
 
+
     return resultados
 
 # -----------------------
@@ -903,6 +970,7 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
 def extrair_profissao_principal_cached(email: str, texto_curriculo: str, max_profissoes: int = 5) -> List[str]:
     # tenta achar documento de currículo pelo hash
     curr = curriculos_col.find_one({"email": email}, {"profissoes_detectadas": 1})
+
     if curr and curr.get("profissoes_detectadas"):
         logging.info("[CACHE] Profissões encontradas no currículo (cache)")
         return curr["profissoes_detectadas"]
