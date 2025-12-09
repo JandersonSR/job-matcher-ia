@@ -947,6 +947,8 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
     vagas_com_scores = []
 
     for vaga in candidate_vagas:
+        if not vaga.get("embedding"):
+            continue
         emb_vaga = torch.tensor(vaga["embedding"])
         score = util.cos_sim(embedding_curriculo, emb_vaga).item()
         vaga["_score"] = score

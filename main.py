@@ -63,7 +63,7 @@ def comparar_embeddings(email: str = ""):
         result = worker_comparar_embeddings(email)
         return {"status": "ok", "detalhe": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos:: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos..: {e}")
 
 @app.get("/scrap-vagas")
 def scrap_vagas(max_pages: int = 3):
@@ -86,10 +86,10 @@ def scrap_vagas_email(email: str = ""):
     """
     try:
         from jobs import worker_scrapping
-        result = worker_scrapping(email)
+        result = worker_scrapping()
         return {"status": "ok", "detalhe": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos:: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos.: {e}")
 
 @app.get("/api/restart_llm")
 def star_server():
