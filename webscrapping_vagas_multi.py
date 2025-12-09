@@ -140,9 +140,17 @@ def scrap_vagascom(term="desenvolvedor", max_pages=1):
         # Armazena no DB e adiciona à lista final
         for vaga in vagas:
             vaga = upsert_vaga_with_search_terms(vaga)
-            has_vagas = vagas_col.find_one({"titulo": vaga["titulo"], "empresa": vaga["empresa"], "site": vaga["site"]})
-            if has_vagas:
+
+            tem_vaga = vagas_col.find_one({
+                "$or": [
+                    {"_uid": vaga["_uid"]},
+                    {"titulo": vaga["titulo"], "empresa": vaga["empresa"], "site": vaga["site"]}
+                ]
+            })
+            if tem_vaga:
+                vagas_col.update_one({"_uid": tem_vaga["_uid"]}, {"$set": vaga})
                 continue
+
             vagas_col.update_one({"_uid": vaga["_uid"]}, {"$set": vaga}, upsert=True)
             vagas_final.append(vaga)
 

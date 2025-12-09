@@ -12,19 +12,6 @@ app = FastAPI(title="Job Matcher - Render Free")
 def health():
     return {"status": "ok", "message": "Job Matcher IA rodando (Render Free) 🚀"}
 
-@app.get("/scrap-vagas")
-def scrap_vagas(max_pages: int = 3):
-    """
-    Dispara o scraping de vagas (chamado por servidor externo via HTTP).
-    Query param max_pages controla quantas páginas cada site deve tentar.
-    """
-    try:
-        from webscrapping_vagas_multi import scrap_todos
-        vagas = scrap_todos(max_pages=max_pages)
-        return {"status": "ok", "total_vagas_processadas": len(vagas)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro no scraping: {e}")
-
 @app.get("/processar-curriculos")
 def processar_curriculos():
     """
@@ -74,6 +61,19 @@ def comparar_embeddings(email: str = ""):
     try:
         from jobs import worker_comparar_embeddings
         result = worker_comparar_embeddings(email)
+        return {"status": "ok", "detalhe": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar currículos:: {e}")
+
+@app.get("/scrap-vagas")
+def scrap_vagas(max_pages: int = 3):
+    """
+    Dispara o processamento de um currículo pendente (um por vez).
+    Chamado por servidor externo via HTTP.
+    """
+    try:
+        from jobs import worker_scrapping
+        result = worker_scrapping()
         return {"status": "ok", "detalhe": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar currículos:: {e}")

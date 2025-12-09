@@ -51,17 +51,17 @@ if RUN_LOCAL_LLM:
 # CONSTANTES / HYPERPARAMS
 # -----------------------
 SIM_THRESHOLD = 0.45       # limiar para considerar requisito atendido
-TOP_K_EMBEDDINGS = 20      # número de vagas consideradas via embeddings
+TOP_K_EMBEDDINGS = 10      # número de vagas consideradas via embeddings
 TOP_N_LLM = 3              # número de vagas que serão avaliadas pelo LLM
 SCRAP_MAX_PAGES = 2        # páginas a scrapear quando necessário
 
 # recomenda criar índices (executar uma vez)
-# try:
-#     vagas_col.create_index([("titulo", "text"), ("descricao", "text")])
-#     scrap_cache_col.create_index("term", unique=True)
-#     curriculos_col.create_index("email", unique=False)
-# except Exception:
-#     pass
+try:
+    vagas_col.create_index([("titulo", "text"), ("descricao", "text")])
+    scrap_cache_col.create_index("term", unique=True)
+    curriculos_col.create_index("email", unique=False)
+except Exception:
+    pass
 
 # -----------------------
 # UTIL: sanitizadores
@@ -184,45 +184,6 @@ def gerar_melhorias(requisitos_nao_atendidos: List[str]) -> List[str]:
 # # -----------------------
 # # COMPARAR REQUISITOS (usa embeddings de habilidades do currículo)
 # # -----------------------
-# def comparar_requisitos(requisitos, habilidades_curriculo_embeddings):
-#     """
-#     Compara cada requisito com o embedding das habilidades do currículo.
-#     Retorna listas de requisitos atendidos e não atendidos.
-#     """
-#     requisitos_atendidos = []
-#     requisitos_nao_atendidos = []
-
-#     for req_text, req_emb in requisitos:
-#         # garante que req_emb é tensor
-#         if isinstance(req_emb, np.ndarray):
-#             req_emb = torch.tensor(req_emb)
-
-#         # transforma em [1, dim] se necessário
-#         if req_emb.ndim == 1:
-#             req_emb = req_emb.unsqueeze(0)
-
-#         sims = util.cos_sim(req_emb, habilidades_curriculo_embeddings)
-#         max_sim = sims.max().item()
-
-#         # quebra requisito em habilidades (palavras ou pequenas frases)
-#         sub_reqs = [r.strip() for r in re.split(r",|;|\.", req_text) if len(r.strip()) > 2]
-
-#         if max_sim >= SIM_THRESHOLD:
-#             requisitos_atendidos.extend(sub_reqs)
-#         else:
-#             requisitos_nao_atendidos.extend(sub_reqs)
-
-#     return requisitos_atendidos, requisitos_nao_atendidos
-
-# def gerar_melhorias(requisitos_nao_atendidos):
-#     """
-#     Gera sugestões de melhoria separadas por habilidade.
-#     """
-#     melhorias = []
-#     for req in requisitos_nao_atendidos:
-#         req = req.lower()
-#         melhorias.append(f"Adicionar experiência com {req}.")
-#     return melhorias
 
 # -----------------------
 # LLM helper
@@ -289,6 +250,12 @@ def processar_com_embeddings(texto, vagas, top_k=TOP_K_EMBEDDINGS):
     # Quebra currículo em pequenas habilidades
     habilidades_emb = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
 
+    # 2. Gera EMBEDDINGS das habilidades
+    if habilidades_emb:
+        habilidades_vecs = embedding_model.encode(habilidades_emb, convert_to_tensor=True)
+    else:
+        habilidades_vecs = None
+
     # habilidades_emb = None
 
     resultados = []
@@ -320,7 +287,7 @@ def processar_com_embeddings(texto, vagas, top_k=TOP_K_EMBEDDINGS):
         # Compara requisitos com currículo
         requisitos_atendidos, requisitos_nao_atendidos = comparar_requisitos(
             requisitos_pairs,
-            habilidades_emb
+            habilidades_vecs
         )
 
         melhorias = gerar_melhorias(requisitos_nao_atendidos)
@@ -602,11 +569,14 @@ def comparar_misto(email: str, texto: str, top_k_emb: int = 10, top_n_llm: int =
         logging.info(f"[LLM] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
 
         vagas_profissao =  buscar_vagas_otimizado(term, limit=5)
+        print(f"[MIXTO] Vagas encontradas para '{term}': {len(vagas_profissao)}")
         if len(vagas_profissao) > 0 :
             vagas = vagas_profissao
         else:
             vagas = garantir_vagas_para_profissao(email, texto, min_por_profissao=0)
 
+
+    print(f"[MIXTO] Vagas encontradas para '{term}': {len(vagas)}")
     if not vagas:
         logging.info("[MIXTO] Nenhuma vaga encontrada após tentativas.")
         return []
@@ -636,7 +606,7 @@ def worker_run_once():
     email = curriculo.get("email") if curriculo else "jandersonrodriguesir@gmail.com"
 
     if not curriculo:
-        print("[worker] nenhum currículo pendente")
+        print("[worker] nenhum currículo pendente", email)
         return {"mensagem": "nenhum currículo pendente"}
 
     texto = curriculo.get("conteudo") or curriculo.get("texto", "")
@@ -668,8 +638,8 @@ def worker_comparar_embeddings(email: str):
     )
 
     if not curriculo:
-        print("[worker] nenhum currículo pendente")
-        return {"mensagem": "nenhum currículo pendente"}
+        print("[worker] nenhum currículo pendente!", email)
+        return {"mensagem": "nenhum currículo pendente!"}
 
     texto = curriculo.get("conteudo") or curriculo.get("texto", "")
     if not texto:
@@ -700,8 +670,8 @@ def worker_comparar_llm(email: str):
     )
 
     if not curriculo:
-        print("[worker] nenhum currículo pendente")
-        return {"mensagem": "nenhum currículo pendente"}
+        print("[worker] nenhum currículo pendente.", email)
+        return {"mensagem": "nenhum currículo pendente."}
 
     texto = curriculo.get("conteudo") or curriculo.get("texto", "")
     if not texto:
@@ -732,8 +702,8 @@ def worker_comparar_misto(email: str):
     )
 
     if not curriculo:
-        print("[worker] nenhum currículo pendente")
-        return {"mensagem": "nenhum currículo pendente"}
+        print("[worker] nenhum currículo pendente..", email)
+        return {"mensagem": "nenhum currículo pendente.."}
 
     texto = curriculo.get("conteudo") or curriculo.get("texto", "")
 
@@ -744,12 +714,16 @@ def worker_comparar_misto(email: str):
         )
         return {"erro": "currículo sem texto"}
 
+    top_vagas = comparar_por_embeddings_otimizado(email, texto, top_k=3, usar_sugestoes=False) or comparar_por_embeddings(email, texto)
+
     # usa pipeline misto como padrão
-    top_vagas = comparar_por_embeddings_otimizado(email, texto, top_k=3) or comparar_por_embeddings(email, texto)
-
-
-
+    print(f"[MIXTO WORKER] Vagas finais selecionadas: {len(top_vagas) if top_vagas else 0}")
     logging.info(f"[LLM] Processando com LLM - Misto para {len(top_vagas)} vagas")
+
+    if not top_vagas:
+        vagas = garantir_vagas_para_profissao(email, texto)
+        top_vagas = comparar_por_embeddings_otimizado(email, texto, top_k=3, usar_sugestoes=False) or comparar_por_embeddings(email, texto)
+
     resultado = processar_com_llm(texto, top_vagas)
 
     curriculos_col.update_one(
@@ -762,6 +736,27 @@ def worker_comparar_misto(email: str):
         "id": str(curriculo["_id"]),
         "total_vagas": len(resultado)
     }
+
+def worker_scrapping():
+    curriculos = curriculos_col.find(
+        {"_id": {"$exists": True}}
+    )
+    profissoes = set()
+    for c in curriculos:
+        profs = c.get("profissoes_detectadas", [])
+        for p in profs:
+            profissoes.add(p)
+
+    print(f"[SCRAP WORKER] profissões únicas detectadas: {len(profissoes)}")
+    for profissao in profissoes:
+        profissao_nucleo = reduzir_profissao(profissao)
+        term = sanitizer_vagas_term(profissao_nucleo)
+        logging.info(f"[SCRAP WORKER] procurando vagas para profissão núcleo: '{profissao_nucleo}' (termo: '{term}')")
+        scrap_vagascom(term=term, max_pages=SCRAP_MAX_PAGES)
+
+
+    return { "mensagem": "scrap concluído" }
+
 
 # Se não houver vagas suficientes para a profissão extraída do currículo,
 # realiza scraping adicional no Vagas.com para garantir variedade.
@@ -847,8 +842,6 @@ def garantir_vagas_para_profissao(email: str, texto_curriculo: str, min_por_prof
                     url = v.get("url")
                     # tenta evitar duplicata por url
                     if url and vagas_col.find_one({"url": url}):
-                        doc = vagas_col.find_one({"url": url})
-                        inserted_docs.append(doc)
                         continue
                     # insere e calcula embedding
                     doc = dict(v)
@@ -899,7 +892,7 @@ def buscar_vagas_otimizado(term: str, limit: int = 50) -> List[dict]:
     return docs
 
 
-def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K_EMBEDDINGS):
+def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K_EMBEDDINGS, usar_sugestoes: bool = True) -> List[dict]:
     """
     Busca vagas relevantes usando $text + embeddings pré-calculadas.
     Retorna as top_k vagas mais compatíveis.
@@ -945,6 +938,46 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
     # Ordena pelo score e pega top_k
     top_vagas = sorted(vagas_com_scores, key=lambda x: x["_score"], reverse=True)[:top_k]
 
+    if not usar_sugestoes:
+            resultados = []
+            req_embeddings = []
+
+            for vaga in top_vagas:
+                descricao = f"{vaga.get('titulo','')} {vaga.get('descricao','')}".strip()
+                req_text_list = extrair_requisitos(descricao)
+                if req_text_list:
+                    req_vecs = embedding_model.encode(req_text_list, convert_to_tensor=False)
+                    req_embeddings = [np.array(v, dtype=np.float32) for v in req_vecs]
+
+                # Quebra currículo em pequenas habilidades
+                requisitos_pairs = list(zip(req_text_list, req_embeddings))
+
+                # Compara requisitos com currículo
+
+                resultados.append({
+                    "vaga_id": vaga.get("_id"),
+                    "titulo": vaga.get("titulo"),
+                    "empresa": vaga.get("empresa"),
+                    "descricao": descricao,
+                    "url": vaga.get("url"),
+                    "site": vaga.get("site"),
+                    "compatibilidade": round(vaga["_score"], 4),
+                    "requisitos": req_text_list,
+                    "requisitos_atendidos": vaga.get("requisitos_atendidos", []),
+                    "requisitos_nao_atendidos": vaga.get("requisitos_nao_atendidos", []),
+                    "melhorias_sugeridas": vaga.get("melhorias_sugeridas", []),
+                    "_raw_doc": vaga
+                })
+            return resultados
+
+    habilidades_emb = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
+
+    # 2. Gera EMBEDDINGS das habilidades
+    if habilidades_emb:
+        habilidades_vecs = embedding_model.encode(habilidades_emb, convert_to_tensor=True)
+    else:
+        habilidades_vecs = None
+
     # Extrai requisitos apenas para top_k final
     resultados = []
     req_embeddings = []
@@ -958,12 +991,11 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
 
         # Quebra currículo em pequenas habilidades
         requisitos_pairs = list(zip(req_text_list, req_embeddings))
-        habilidades_emb = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
 
         # Compara requisitos com currículo
         requisitos_atendidos, requisitos_nao_atendidos = comparar_requisitos(
             requisitos_pairs,
-            habilidades_emb
+            habilidades_vecs
         )
 
         melhorias = gerar_melhorias(requisitos_nao_atendidos)
