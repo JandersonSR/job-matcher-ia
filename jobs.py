@@ -737,9 +737,13 @@ def worker_comparar_misto(email: str):
         "total_vagas": len(resultado)
     }
 
-def worker_scrapping():
+def worker_scrapping(email: str = ""):
+    search_curriculos = {"_id": {"$exists": True}}
+    if email:
+        search_curriculos["email"] = email
+
     curriculos = curriculos_col.find(
-        {"_id": {"$exists": True}}
+        search_curriculos
     )
     profissoes = set()
     for c in curriculos:
