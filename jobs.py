@@ -893,6 +893,19 @@ def buscar_vagas_otimizado(term: str, limit: int = 50) -> List[dict]:
         ).limit(limit)
     )
 
+    if not docs:
+        docs = list(
+            vagas_col.find(
+                {
+                    "$or": [
+                        {"titulo": {"$regex": term_sanitizado, "$options": "i"}},
+                        {"descricao": {"$regex": term_sanitizado, "$options": "i"}}
+                    ]
+                },
+                {"titulo": 1, "descricao": 1, "url": 1, "empresa": 1, "site": 1, "embedding": 1}
+            ).limit(limit)
+        )
+
     return docs
 
 
