@@ -51,7 +51,7 @@ if RUN_LOCAL_LLM:
 # CONSTANTES / HYPERPARAMS
 # -----------------------
 SIM_THRESHOLD = 0.45       # limiar para considerar requisito atendido
-TOP_K_EMBEDDINGS = 10      # número de vagas consideradas via embeddings
+TOP_K_EMBEDDINGS = 20      # número de vagas consideradas via embeddings
 TOP_N_LLM = 3              # número de vagas que serão avaliadas pelo LLM
 SCRAP_MAX_PAGES = 2        # páginas a scrapear quando necessário
 
@@ -287,8 +287,9 @@ def processar_com_embeddings(texto, vagas, top_k=TOP_K_EMBEDDINGS):
     embedding_curriculo = embedding_model.encode(texto, convert_to_tensor=True)
 
     # Quebra currículo em pequenas habilidades
-    habilidades = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
-    habilidades_emb = None
+    habilidades_emb = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
+
+    # habilidades_emb = None
 
     resultados = []
 
@@ -946,9 +947,27 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
 
     # Extrai requisitos apenas para top_k final
     resultados = []
+    req_embeddings = []
+
     for vaga in top_vagas:
         descricao = f"{vaga.get('titulo','')} {vaga.get('descricao','')}".strip()
         req_text_list = extrair_requisitos(descricao)
+        if req_text_list:
+            req_vecs = embedding_model.encode(req_text_list, convert_to_tensor=False)
+            req_embeddings = [np.array(v, dtype=np.float32) for v in req_vecs]
+
+        # Quebra currículo em pequenas habilidades
+        requisitos_pairs = list(zip(req_text_list, req_embeddings))
+        habilidades_emb = [s.strip() for s in texto.split("\n") if len(s.strip()) > 3]
+
+        # Compara requisitos com currículo
+        requisitos_atendidos, requisitos_nao_atendidos = comparar_requisitos(
+            requisitos_pairs,
+            habilidades_emb
+        )
+
+        melhorias = gerar_melhorias(requisitos_nao_atendidos)
+
         resultados.append({
             "vaga_id": vaga.get("_id"),
             "titulo": vaga.get("titulo"),
@@ -958,6 +977,9 @@ def comparar_por_embeddings_otimizado(email: str, texto: str, top_k: int = TOP_K
             "site": vaga.get("site"),
             "compatibilidade": round(vaga["_score"], 4),
             "requisitos": req_text_list,
+            "requisitos_atendidos": requisitos_atendidos,
+            "requisitos_nao_atendidos": requisitos_nao_atendidos,
+            "melhorias_sugeridas": melhorias,
             "_raw_doc": vaga
         })
 
